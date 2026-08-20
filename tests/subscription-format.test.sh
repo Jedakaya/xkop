@@ -60,6 +60,13 @@ check "ссылок в списке" "4" \
     "$(subscription_count_servers "$FIXTURES/link-list.txt" link-list)"
 check "ссылок в url-safe списке" "5" \
     "$(subscription_count_servers "$FIXTURES/link-list-urlsafe.txt" link-list)"
+
+# Отдельно про хвост. GNU base64 останавливается на первом символе не своего
+# алфавита и печатает то, что успел, с нулевым кодом возврата: список молча
+# обрезается на первом "-" или "_", и серверы после него исчезают. Проверка
+# именно на последнюю ссылку, потому что теряется всегда хвост.
+check "url-safe: хвост списка не потерян" "1" \
+    "$(subscription_decode_link_list "$FIXTURES/link-list-urlsafe.txt" | grep -c 'ru0.example.com')"
 check "в мусоре серверов нет" "0" \
     "$(subscription_count_servers "$FIXTURES/junk.txt" unknown)"
 

@@ -54,18 +54,23 @@ subscription_decode_link_list() {
     blob=$(tr -d '[:space:]' < "$file")
     [ -n "$blob" ] || return 0
 
+    # The alphabet is normalized BEFORE decoding, always - never as a retry
+    # after a failed attempt. GNU base64 stops at the first character outside
+    # its alphabet and prints what it managed to decode, exit code and all: a
+    # url-safe payload then yields a silently truncated list instead of an
+    # error, and the servers past the first "-" or "_" simply disappear.
+    # Neither "+" nor "/" can occur in a url-safe payload, so translating is
+    # safe for both alphabets.
+    blob=$(printf '%s' "$blob" | tr '_-' '/+')
+
+    padding=$((${#blob} % 4))
+    case "$padding" in
+        2) blob="$blob==" ;;
+        3) blob="$blob=" ;;
+        1) return 0 ;;
+    esac
+
     decoded=$(printf '%s' "$blob" | base64 -d 2> /dev/null)
-
-    if [ -z "$decoded" ]; then
-        blob=$(printf '%s' "$blob" | tr '_-' '/+')
-        padding=$((${#blob} % 4))
-        case "$padding" in
-            2) blob="$blob==" ;;
-            3) blob="$blob=" ;;
-        esac
-        decoded=$(printf '%s' "$blob" | base64 -d 2> /dev/null)
-    fi
-
     [ -n "$decoded" ] || return 0
 
     printf '%s\n' "$decoded" | tr -d '\r' \
