@@ -21,7 +21,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/xkop
 	SECTION:=net
 	CATEGORY:=Network
-	DEPENDS:=+curl +jq +gzip +coreutils-base64
+	DEPENDS:=+curl +jq +gzip +coreutils-base64 +nftables +kmod-nft-tproxy
 	CONFLICTS:=podkop luci-app-passwall luci-app-passwall2
 	TITLE:=Traffic router on Xray-core
 	URL:=https://github.com/Jedakaya/xkop
@@ -47,6 +47,9 @@ define Package/xkop/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/xkop $(1)/etc/config/xkop
 
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/xkop $(1)/etc/init.d/xkop
+
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ./files/usr/bin/xkop $(1)/usr/bin/xkop
 
@@ -54,6 +57,14 @@ define Package/xkop/install
 	$(CP) ./files/usr/lib/xkop/* $(1)/usr/lib/xkop/
 
 	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PKG_VERSION)/g' $(1)/usr/lib/xkop/constants.sh
+endef
+
+define Package/xkop/prerm
+#!/bin/sh
+
+/etc/init.d/xkop stop 2>/dev/null
+
+exit 0
 endef
 
 $(eval $(call BuildPackage,xkop))

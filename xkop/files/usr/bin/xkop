@@ -14,6 +14,8 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/stats.sh"
 . "$XKOP_LIB_DIR/subscription.sh"
 . "$XKOP_LIB_DIR/config.sh"
+. "$XKOP_LIB_DIR/nft.sh"
+. "$XKOP_LIB_DIR/service.sh"
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
 # а не кодом возврата: «оставлена прежняя» — это не отказ команды.
@@ -34,6 +36,44 @@ cmd_configure() {
         --argjson exists "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
         '{ok: ($reason != "kept_previous"), result: $reason, path: $path,
           nodes: $nodes, config_present: $exists}'
+}
+
+# Состояние движка. Поля именуются по роли, а не по названию движка: панель
+# и LuCI не должны знать, что внутри — см. docs/cli-contract.md.
+cmd_check_engine() {
+    local installed=0 version="" version_ok=0 hysteria2=0
+    local service_exist=0 autostart_disabled=0 running=0 answering=0
+
+    if command -v "$XKOP_ENGINE_BIN" > /dev/null 2>&1; then
+        installed=1
+        version=$("$XKOP_ENGINE_BIN" version 2> /dev/null | head -n 1 | awk '{print $2}')
+        if [ -n "$version" ]; then
+            version_ok=1
+            engine_supports hysteria2 "$version" && hysteria2=1
+        fi
+    fi
+
+    [ -f /etc/init.d/xkop ] && service_exist=1
+    [ -x /etc/rc.d/S99xkop ] || autostart_disabled=1
+    engine_process_running && running=1
+    engine_answers && answering=1
+
+    jq -nc \
+        --arg version "$version" \
+        --argjson installed "$installed" --argjson version_ok "$version_ok" \
+        --argjson hysteria2 "$hysteria2" --argjson service_exist "$service_exist" \
+        --argjson autostart_disabled "$autostart_disabled" \
+        --argjson running "$running" --argjson answering "$answering" \
+        '{
+            engine_installed: ($installed == 1),
+            engine_version: (if $version == "" then null else $version end),
+            engine_version_ok: ($version_ok == 1),
+            engine_supports_hysteria2: ($hysteria2 == 1),
+            engine_service_exist: ($service_exist == 1),
+            engine_autostart_disabled: ($autostart_disabled == 1),
+            engine_process_running: ($running == 1),
+            engine_answering: ($answering == 1)
+        }'
 }
 
 cmd_show_engine_config() {
@@ -101,6 +141,11 @@ xkop - маршрутизатор трафика на Xray-core
                              панель
   subscription_update [id]   обновить подписку или все сразу
   get_subscription_userinfo  трафик и срок из заголовка подписки
+  get_status                 состояние службы, движка и правил
+  check_engine               установлен ли движок, поднялся ли, отвечает ли
+  configure                  собрать конфигурацию движка
+  show_engine_config         показать установленную конфигурацию
+  start / stop / restart     управление службой
   version                    версия пакета
   help                       эта справка
 
@@ -128,6 +173,28 @@ main() {
             ;;
         configure)
             cmd_configure
+            ;;
+        prepare)
+            if service_prepare; then
+                jq -nc '{ok: true, result: "prepared"}'
+            else
+                jq -nc '{ok: false, error: "nothing_to_run", detail: {config_present: false}}'
+            fi
+            ;;
+        teardown)
+            service_teardown
+            jq -nc '{ok: true, result: "torn_down"}'
+            ;;
+        get_status)
+            service_status_json
+            ;;
+        check_engine | check_sing_box)
+            cmd_check_engine
+            ;;
+        start | stop | restart | enable | disable)
+            # Служба живёт в procd, и решение о процессе принимает он.
+            /etc/init.d/xkop "$command" > /dev/null 2>&1
+            jq -nc --arg action "$command" '{ok: true, result: $action}'
             ;;
         show_engine_config | show_sing_box_config)
             cmd_show_engine_config
