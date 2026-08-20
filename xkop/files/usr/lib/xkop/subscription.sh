@@ -583,10 +583,15 @@ subscription_ids() {
         | sed -n "s/^$XKOP_CONFIG\.\([^.=]*\)=subscription$/\1/p"
 }
 
+# Обновляет то, чему пора. Принудительно — когда просят руками: человек,
+# нажавший «обновить», ждёт запроса к панели, а не рассказа про расписание.
 subscription_update_all() {
-    local id
+    local id force="${1:-}"
+
     for id in $(subscription_ids); do
-        subscription_update "$id"
+        if [ "$force" = "force" ] || subscription_due "$id"; then
+            subscription_update "$id"
+        fi
     done
 }
 
@@ -607,4 +612,40 @@ subscription_pool_all() {
     jq -s -c --arg mode merge --arg subscription "" --arg format "" \
         -f "$XKOP_LIB_DIR/subscription.jq" < "$work" 2> /dev/null || echo '[]'
     rm -f "$work"
+}
+
+# "1h", "30m", "2d" -> seconds. An unparsable value falls back to an hour
+# rather than to zero: zero would mean asking the panel on every cycle.
+subscription_interval_seconds() {
+    local raw="$1" number unit
+
+    [ -n "$raw" ] || raw="1h"
+    number=$(printf '%s' "$raw" | sed 's/[^0-9].*$//')
+    unit=$(printf '%s' "$raw" | sed 's/^[0-9]*//' | cut -c1)
+    [ -n "$number" ] || { printf '3600'; return 0; }
+
+    case "$unit" in
+        s) printf '%s' "$number" ;;
+        m) printf '%s' "$((number * 60))" ;;
+        d) printf '%s' "$((number * 86400))" ;;
+        *) printf '%s' "$((number * 3600))" ;;
+    esac
+}
+
+# Whether it is time to ask again. The schedule belongs to the subscription,
+# and the cron job only wakes up often enough to notice.
+subscription_due() {
+    local id="$1" interval updated now
+
+    interval=$(subscription_interval_seconds "$(uci -q get "$XKOP_CONFIG.$id.update_interval" 2> /dev/null)")
+    updated=$(subscription_meta "$id" | jq -r '.updated_at // 0' 2> /dev/null)
+    [ -n "$updated" ] || updated=0
+    now=$(date +%s)
+
+    # Never updated, or the cache holds nothing: ask now, whatever the
+    # schedule says.
+    [ "$updated" -eq 0 ] && return 0
+    [ "$(subscription_pool "$id" | jq 'length' 2> /dev/null)" = "0" ] && return 0
+
+    [ "$((now - updated))" -ge "$interval" ]
 }

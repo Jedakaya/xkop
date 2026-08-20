@@ -42,7 +42,7 @@ cron_install() {
 
     grep -v "$XKOP_CRON_MARKER" "$crontab" 2> /dev/null > "$tmp" || true
     {
-        echo "$minute * * * * /usr/bin/xkop subscription_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
+        echo "$minute * * * * /usr/bin/xkop subscription_refresh > /dev/null 2>&1 $XKOP_CRON_MARKER"
         echo "$minute 5 * * * /usr/bin/xkop configure > /dev/null 2>&1 $XKOP_CRON_MARKER"
         echo "$minute 4 * * * /usr/bin/xkop lists_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
         echo "$minute 4 * * * /usr/bin/xkop userlists_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
@@ -134,6 +134,36 @@ service_teardown() {
     nft_clear
     dnsmasq_protection_clear
     dnsmasq_restore
+}
+
+# Интернет поднялся. Это важный момент: при старте роутера WAN обычно ещё
+# не готов, подписки не приезжают, и роутер поднимается на кэше или без
+# узлов вовсе. Здесь он добирает то, что не смог.
+#
+# Ничего не перезапускается без нужды. Работающий движок трогать на каждое
+# мигание интерфейса — это способ уронить то, что работало.
+service_on_wan_up() {
+    local restart=0
+
+    if ! nft_present; then
+        log_info "правила nft отсутствуют, применяю заново"
+        nft_apply || true
+    fi
+
+    lists_present || lists_update
+
+    # Спрашиваются только те подписки, которым пора, плюс те, у кого пусто:
+    # именно они и есть причина, по которой мы сюда пришли.
+    subscription_update_all
+
+    if [ "$(subscription_pool_all | jq 'length' 2> /dev/null)" != "0" ]; then
+        config_generate && restart=1
+    fi
+
+    if [ "$restart" -eq 1 ]; then
+        log_info "после подъёма WAN появились узлы, перезапускаю движок"
+        /etc/init.d/xkop restart > /dev/null 2>&1 &
+    fi
 }
 
 service_status_json() {

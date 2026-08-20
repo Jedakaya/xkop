@@ -47,4 +47,20 @@ reload_service() {
 
 service_triggers() {
     procd_add_reload_trigger "xkop"
+
+    # Подъём интерфейса. При старте роутера WAN обычно ещё не готов: подписки
+    # не приезжают, и роутер поднимается на кэше или вовсе без узлов. Когда
+    # интернет появляется, xkop добирает недостающее сам, без вмешательства.
+    local interfaces
+    interfaces=$(uci -q get xkop.settings.wan_interface)
+    [ -n "$interfaces" ] || interfaces="wan"
+
+    PROCD_RELOAD_DELAY=5000
+
+    procd_open_trigger
+    local iface
+    for iface in $interfaces; do
+        procd_add_interface_trigger "interface.*.up" "$iface" /usr/bin/xkop wan_up
+    done
+    procd_close_trigger
 }

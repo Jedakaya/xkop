@@ -111,11 +111,14 @@ cmd_subscriptions() {
     printf ']\n'
 }
 
+# Человек, нажавший «обновить», ждёт запроса к панели, а не рассказа
+# про расписание. По расписанию обновляется то, чему пора, — это делает
+# задача cron, а не эта команда.
 cmd_subscription_update() {
     if [ -n "${1:-}" ]; then
         subscription_update "$1"
     else
-        subscription_update_all
+        subscription_update_all force
     fi
     cmd_subscriptions
 }
@@ -186,6 +189,12 @@ main() {
         subscription_update)
             cmd_subscription_update "$@"
             ;;
+        subscription_refresh)
+            # Задача по расписанию: спрашивает только те подписки, которым
+            # пора по их собственному интервалу.
+            subscription_update_all
+            cmd_subscriptions
+            ;;
         get_subscription_userinfo)
             cmd_subscription_userinfo
             ;;
@@ -234,6 +243,10 @@ main() {
             else
                 jq -nc '{ok: false, error: "nothing_to_run", detail: {config_present: false}}'
             fi
+            ;;
+        wan_up)
+            service_on_wan_up
+            jq -nc '{ok: true, result: "wan_up"}'
             ;;
         teardown)
             service_teardown
