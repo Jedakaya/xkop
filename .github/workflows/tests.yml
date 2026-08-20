@@ -54,7 +54,10 @@ jobs:
         run: |
           curl -fsSL -o /tmp/xray.zip \
             https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
-          unzip -o -q /tmp/xray.zip xray -d /tmp/xray
+          # geosite.dat идёт следом за бинарником: правила вида "geosite:xxx"
+          # движок разворачивает при загрузке конфигурации, и без файла он
+          # отвергает её целиком. На роутере действует то же требование.
+          unzip -o -q /tmp/xray.zip xray geosite.dat -d /tmp/xray
           chmod +x /tmp/xray/xray
           /tmp/xray/xray version | head -n 1
 
