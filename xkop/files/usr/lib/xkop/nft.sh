@@ -28,7 +28,8 @@
 
 nft_ruleset() {
     local interfaces="$1" excluded="$2" fakeip="${3:-0}" exclude_ntp="${4:-0}"
-    local ifname_elements="" excluded_elements=""
+    local routed="${5:-}"
+    local ifname_elements="" excluded_elements="" routed_elements=""
 
     for iface in $interfaces; do
         ifname_elements="$ifname_elements \"$iface\","
@@ -39,6 +40,11 @@ nft_ruleset() {
         excluded_elements="$excluded_elements $address,"
     done
     excluded_elements="${excluded_elements%,}"
+
+    for address in $routed; do
+        routed_elements="$routed_elements $address,"
+    done
+    routed_elements="${routed_elements%,}"
 
     cat << EOF
 table inet $XKOP_NFT_TABLE {
@@ -77,6 +83,20 @@ cat << EXCLUDED
 EXCLUDED
 fi)
 
+$(if [ -n "$routed_elements" ]; then
+cat << ROUTED
+
+    # Адреса, ради которых движок и нужен: поддельный диапазон и подсети
+    # профилей. Всё остальное ядро отдаёт напрямую, не будя userspace.
+    set routed4 {
+        type ipv4_addr
+        flags interval
+        auto-merge
+        elements = { $routed_elements }
+    }
+ROUTED
+fi)
+
     chain mangle {
         type filter hook prerouting priority -150; policy accept;
 
@@ -93,7 +113,27 @@ cat << NTP
         udp dport 123 return
 NTP
 fi)
+$(if [ -n "$routed_elements" ]; then
+cat << PICK
+        # Метится только то, что действительно маршрутизируется.
+        #
+        # Правило было одно: пометить весь трафик с LAN и отдать движку. Тогда
+        # через userspace идёт и то, что уходит напрямую, - то есть весь
+        # интернет, включая замер скорости. На двухъядерном роутере это
+        # ощущается как «нестабильное соединение», хотя ничего не сломано.
+        #
+        # Так делает podkop, и это возможно ровно в режиме поддельных адресов:
+        # маршрутизируемые имена уже получили адрес из своего диапазона, а
+        # подсети профилей известны и так. По адресу видно, кого перехватывать.
+        ip daddr @routed4 meta l4proto { tcp, udp } meta mark set $XKOP_NFT_MARK counter
+PICK
+else
+cat << ALL
+        # Имя видно только внутри соединения, поэтому через движок обязано
+        # пройти всё: иначе распознавать нечего.
         meta l4proto { tcp, udp } meta mark set $XKOP_NFT_MARK counter
+ALL
+fi)
     }
 $(if [ "$fakeip" = "1" ]; then
 cat << FAKEIP
@@ -143,11 +183,37 @@ nft_routing_rule_remove() {
     ip route flush table "$XKOP_ROUTE_TABLE" 2> /dev/null || true
 }
 
+# Адреса, ради которых стоит будить движок: поддельный диапазон плюс подсети
+# всех профилей, привязанных к непрямым каналам. Ручные подсети, списки
+# сообщества и списки по ссылке — всё это уже сведено в профиль.
+nft_routed_addresses() {
+    local id
+
+    printf '%s
+' "$XKOP_FAKEIP_RANGE"
+
+    for id in $(config_section_ids binding 2> /dev/null); do
+        channel=$(config_uci_get "$id" channel)
+        [ -n "$channel" ] || continue
+        [ "$(config_uci_get "$channel" type)" = "direct" ] && continue
+
+        profile=$(config_uci_get "$id" profile)
+        [ -n "$profile" ] || continue
+
+        config_profile_json "$profile" 2> /dev/null | jq -r '.subnet[]?' 2> /dev/null
+    done
+}
+
 nft_apply() {
-    local interfaces excluded fakeip=0 exclude_ntp=0
+    local interfaces excluded fakeip=0 exclude_ntp=0 routed=""
 
     [ "$(config_uci_get settings dns_mode 2> /dev/null)" = "fakeip" ] && fakeip=1
     [ "$(config_uci_get settings exclude_ntp 2> /dev/null)" = "1" ] && exclude_ntp=1
+
+    # Выборочный перехват возможен только в режиме поддельных адресов: без него
+    # имя видно лишь внутри соединения, и чтобы его прочесть, соединение
+    # обязано пройти через движок.
+    [ "$fakeip" = "1" ] && routed=$(nft_routed_addresses)
 
     interfaces=$(subscription_config_list settings source_interface | tr '\n' ' ')
     [ -n "$(printf '%s' "$interfaces" | tr -d ' ')" ] || interfaces="br-lan"
@@ -160,7 +226,7 @@ nft_apply() {
 
     nft delete table inet "$XKOP_NFT_TABLE" 2> /dev/null || true
 
-    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "$routed"         | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
         log_error "правила nft отвергнуты: $(head -n 1 "$XKOP_RUN_DIR/nft.err" 2> /dev/null)"
         return 1
     fi

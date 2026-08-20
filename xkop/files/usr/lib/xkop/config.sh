@@ -26,6 +26,27 @@ config_section_ids() {
         | sed -n "s/^$XKOP_CONFIG\.\([^.=]*\)=$1$/\1/p"
 }
 
+# Стратегия выбора узла живёт у канала, а не в общих настройках.
+#
+# Генератор читал settings.strategy — настройки с таким именем в конфигурации
+# нет вовсе, поэтому «Выбор узла» в интерфейсе не делал ничего: что ни выбери,
+# в конфигурацию уезжало значение по умолчанию. Балансировщик у нас один
+# на все подписочные каналы, поэтому берётся первый такой канал.
+config_pool_strategy() {
+    local id value
+
+    value=$(config_uci_get settings strategy)
+    [ -n "$value" ] && { printf '%s' "$value"; return 0; }
+
+    for id in $(config_section_ids channel); do
+        [ "$(config_uci_get "$id" type)" = "subscription" ] || continue
+        value=$(config_uci_get "$id" strategy)
+        [ -n "$value" ] && break
+    done
+
+    printf '%s' "$value"
+}
+
 config_settings_json() {
     jq -nc \
         --arg log_level "$(config_uci_get settings log_level)" \
@@ -36,7 +57,7 @@ config_settings_json() {
         --arg access_log_path "$XKOP_ACCESS_LOG" \
         --arg tproxy_address "$XKOP_TPROXY_ADDRESS" \
         --arg tproxy_port "$XKOP_TPROXY_PORT" \
-        --arg strategy "$(config_uci_get settings strategy)" \
+        --arg strategy "$(config_pool_strategy)" \
         --arg probe_url "$(config_uci_get settings probe_url)" \
         --arg probe_interval "$(config_uci_get settings probe_interval)" \
         --arg block_client_doh "$(config_uci_get settings block_client_doh)" \

@@ -159,6 +159,31 @@ check "интерфейс наружу проставлен прямому ис�
 dns_case '{"dns_extra": []}'
 check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings // null')"
 
+# --- журнал доступа и уровень подробности --------------------------------
+#
+# Проверено на живом движке: при loglevel "none" файл журнала доступа
+# не создаётся вовсе, при "error" и "warning" — пишется. Выбор «молчать»
+# тихо убивал разбор маршрута, и команда честно отвечала «записи о пробе нет»,
+# не понимая причины.
+
+dns_case '{"log_level": "none", "access_log": "1", "dns_extra": []}'
+check "молчать и вести журнал одновременно нельзя" '"error"' "$(q dns-case.json '.log.loglevel')"
+check "журнал доступа при этом на месте" 'true' "$(q dns-case.json '(.log.access != "none")')"
+
+dns_case '{"log_level": "none", "access_log": "0", "dns_extra": []}'
+check "без журнала доступа молчание уважается" '"none"' "$(q dns-case.json '.log.loglevel')"
+
+dns_case '{"log_level": "warning", "access_log": "1", "dns_extra": []}'
+check "обычный уровень не трогается" '"warning"' "$(q dns-case.json '.log.loglevel')"
+
+# --- стратегия берётся из канала ------------------------------------------
+
+dns_case '{"strategy": "leastPing", "dns_extra": []}'
+check "выбранная стратегия доезжает до балансировщика" '"leastPing"' "$(q dns-case.json '.routing.balancers[0].strategy.type')"
+
+dns_case '{"strategy": "leastLoad", "dns_extra": []}'
+check "у leastLoad появляются пороги против скачков" '["300ms","600ms","1s"]' "$(q dns-case.json '.routing.balancers[0].strategy.settings.baselines')"
+
 # --- источники целиком в туннель ------------------------------------------
 
 dns_case '{"fully_routed_ip": ["192.168.1.10", "192.168.1.11"], "dns_extra": []}'

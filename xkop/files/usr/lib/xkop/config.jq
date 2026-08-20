@@ -36,9 +36,23 @@ def node_tags: [ .pool[]?.tag ];
 # engine actually chose. That is the difference between explaining a route and
 # guessing at one: the answer comes from what happened, not from our reading of
 # our own rules. It goes to RAM and is trimmed on a schedule.
+# "none" гасит журнал доступа вместе со всем остальным.
+#
+# Проверено на живом движке: при loglevel "none" файл журнала доступа
+# не создаётся вовсе, при "error" и "warning" - пишется. То есть выбор
+# «молчать» в настройках тихо убивал разбор маршрута, и команда честно
+# отвечала «проба сделана, но записи о ней нет», не понимая почему.
+#
+# Молчать и вести журнал доступа одновременно движок не умеет. Раз журнал
+# нужен - берём самый тихий уровень, при котором он пишется.
+def log_level:
+    (settings.log_level // "warning") as $level
+    | if $level == "none" and (settings.access_log // "1") == "1"
+      then "error" else $level end;
+
 def log_section:
     {
-        loglevel: (settings.log_level // "warning"),
+        loglevel: log_level,
         access: (if (settings.access_log // "1") == "1"
                  then (settings.access_log_path // "/tmp/xkop/access.log")
                  else "none" end)

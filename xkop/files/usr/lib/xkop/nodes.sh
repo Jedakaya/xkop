@@ -56,12 +56,22 @@ nodes_selection_json() {
     override=$(nodes_balancer_field "$output" "Selecting Override")
     selected=$(nodes_balancer_field "$output" "Selects")
 
+    # Закрепление сильнее стратегии, и показывать надо именно его.
+    #
+    # "Selects" в ответе движка — это выбор СТРАТЕГИИ, а не то, куда идёт
+    # трафик. При закреплении он остаётся прежним, хотя соединения уже уходят
+    # на закреплённый узел: проверено на живом движке — в журнале доступа
+    # стоит закреплённый узел, а "Selects" показывает другой. Мы показывали
+    # "Selects", и человек справедливо решал, что его выбор игнорируют.
     jq -nc --arg selected "$selected" --arg override "$override" \
         '{
             ok: true,
             balancer: "pool",
             selection: (if $override != "" then "manual" else "auto" end),
-            selected: (if $selected == "" then null else $selected end),
+            selected: (if $override != "" then $override
+                       elif $selected == "" then null
+                       else $selected end),
+            strategy_would_pick: (if $selected == "" then null else $selected end),
             override: (if $override == "" then null else $override end)
         }'
 }
