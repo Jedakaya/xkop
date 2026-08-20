@@ -275,6 +275,44 @@ diag_global_json() {
         }'
 }
 
+# Раздаётся ли клиентам IPv6, которого наружу нет.
+#
+# Роутер объявляет себя маршрутизатором IPv6 и выдаёт адреса, а маршрута
+# по умолчанию у него нет: клиент получает адрес в никуда. Всё, что пробует
+# IPv6 первым, упирается в пустоту и ждёт таймаута — и человек видит
+# «соединение нестабильно» при полностью рабочем IPv4.
+#
+# Проверяется тремя фактами, а не одним: раздаём ли, есть ли маршрут наружу,
+# и глобальный ли адрес у нас самих. Локальные fd00::/8 наружу не ведут.
+diag_ipv6_json() {
+    local advertised=0 route=0 global=0 mode
+
+    mode=$(uci -q get dhcp.lan.ra 2> /dev/null)
+    case "$mode" in
+        server | relay | hybrid) advertised=1 ;;
+    esac
+
+    ip -6 route show default 2> /dev/null | grep -q . && route=1
+    ip -6 addr show scope global 2> /dev/null | grep -q "inet6 [23]" && global=1
+
+    jq -nc         --argjson advertised "$advertised" --argjson route "$route"         --argjson global "$global" --arg mode "${mode:-нет}"         '{
+            ok: true,
+            advertised: ($advertised == 1),
+            has_default_route: ($route == 1),
+            has_global_address: ($global == 1),
+            mode: $mode,
+            broken: ($advertised == 1 and ($route == 0 or $global == 0)),
+            state: (
+                if $advertised == 0 then "клиентам не раздаётся"
+                elif $route == 0 then "раздаётся клиентам, но маршрута наружу нет"
+                elif $global == 0 then "раздаётся клиентам, но адрес только локальный"
+                else "работает"
+                end
+            )
+        }'
+}
+
+
 # Последние слова движка.
 #
 # «Запущен, но не отвечает» — состояние, в котором интерфейс обязан показать
