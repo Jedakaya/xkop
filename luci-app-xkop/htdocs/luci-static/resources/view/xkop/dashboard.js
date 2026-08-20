@@ -215,6 +215,44 @@ function renderRouterWidget(data) {
   ]);
 }
 
+// Правила nft — половина работы роутера: без них трафик клиентов до движка
+// не доходит вовсе, и обзор показывает только то, что движок нагенерировал
+// сам. «Не применены» без причины отправляет человека в журнал за тем, что
+// нам уже известно, поэтому причина берётся из ответа nft, а не выдумывается.
+function renderRules(nft) {
+  if (!nft) return "";
+  if (nft.rules_present) {
+    return widget(_("Правила"), [
+      big(nft.packets_seen > 0 ? _("работают") : _("применены")),
+      E("div", { class: "xkop-widget-note" },
+        nft.packets_seen > 0
+          ? _("пакетов через них: ") + nft.packets_seen
+          : _("трафик через них ещё не шёл")),
+      line(_("таблица"), "inet " + (nft.table || "xkop"), ""),
+    ]);
+  }
+
+  const body = [
+    big(_("не применены")),
+    E("div", { class: "xkop-warn-text" },
+      _("Трафик клиентов до движка не доходит.")),
+  ];
+
+  if (nft.tproxy_module === "missing") {
+    body.push(E("div", { class: "xkop-note" },
+      _("Модуля ядра nft_tproxy нет. Поставить: apk add kmod-nft-tproxy (или opkg install).")));
+  }
+  if (nft.reason) {
+    body.push(E("div", { class: "xkop-note" }, _("nft ответил: ") + nft.reason));
+  }
+  if (!nft.reason && nft.tproxy_module !== "missing") {
+    body.push(E("div", { class: "xkop-note" },
+      _("Причина не записана — правила ещё не применялись в этой загрузке.")));
+  }
+
+  return widget(_("Правила"), body);
+}
+
 // Пул серверов, а не список пингов. Число «7 из 9 живы» полезнее девяти
 // чисел в миллисекундах; задержки раскрываются по требованию.
 function renderPool(nodes, refresh) {
@@ -456,7 +494,39 @@ return L.Class.extend({
   render: function () {
     const root = E("div", { class: "xkop-dashboard" });
 
+    // Что считается изменением. Время работы и свободная память меняются
+    // каждую секунду, и перерисовывать из-за них всю страницу — это мигание
+    // и прыжок к началу списка на ровном месте. Сравнивается только то, ради
+    // чего на обзор и смотрят.
+    function signature(data) {
+      if (!data || !data.ok) return "нет ответа";
+      const s = data.service || {};
+      const d = (data.stats && data.stats.distribution) || {};
+      return JSON.stringify([
+        data.summary,
+        s.state, s.enabled, s.nodes,
+        (data.engine || {}).engine_version,
+        d.direct && d.direct.bytes, d.proxy && d.proxy.bytes, d.blocked && d.blocked.bytes,
+        (data.nodes && data.nodes.selected) || null,
+        (data.nodes && data.nodes.nodes || []).map(function (n) { return [n.tag, n.state, n.delay_ms]; }),
+        (data.subscriptions || []).map(function (x) { return [x.subscription, x.state, x.servers]; }),
+        (data.canary || {}).state,
+        (data.nft || {}).state,
+      ]);
+    }
+
+    let painted = null;
+
     function paint(data) {
+      const sig = signature(data);
+      if (sig === painted) return;
+      painted = sig;
+
+      // Раскрытый список узлов и позиция прокрутки — состояние пользователя,
+      // а не наше. Перерисовка не имеет права его отнимать.
+      const wasOpen = !!root.querySelector("details[open]");
+      const scrollY = window.scrollY;
+
       while (root.firstChild) root.removeChild(root.firstChild);
 
       if (!data || !data.ok) {
@@ -470,12 +540,19 @@ return L.Class.extend({
         renderServiceWidget(data, refresh),
         renderTrafficWidget(data.stats),
         renderSavingsWidget(data.stats),
+        renderRules(data.nft),
         renderRouterWidget(data),
       ]));
       root.appendChild(renderPool(data.nodes, refresh));
       root.appendChild(renderSubscriptions(data.subscriptions, refresh));
       root.appendChild(renderCanary(data.canary));
       root.appendChild(renderExplain());
+
+      if (wasOpen) {
+        const details = root.querySelector("details");
+        if (details) details.open = true;
+      }
+      window.scrollTo(0, scrollY);
     }
 
     function refresh() {
@@ -487,7 +564,7 @@ return L.Class.extend({
       // Обзор должен оставаться правдой, пока на него смотрят. Обновление
       // на месте: перезагрузка страницы после каждой кнопки теряет и позицию
       // прокрутки, и раскрытый список узлов.
-      poll.add(refresh, 10);
+      poll.add(refresh, 15);
       return root;
     });
   },

@@ -58,13 +58,14 @@ const CSS = `
 
 .xkop-card { border: 1px solid rgba(128,128,128,.3); border-radius: 6px; padding: .8em 1em; }
 .xkop-card h3 { margin: 0 0 .6em 0; font-size: 1.05em; }
-/* Значение не переносится посреди себя: «168.4 МБ» в две строки читается
-   как две разные цифры. Подпись жмётся, значение — нет. */
+/* Подпись слева, число справа, между ними — свободное место. Подпись может
+   переноситься, число не может: «168.4 МБ» в две строки читается как две
+   разные цифры. Поэтому растягивается именно подпись, а не строка целиком. */
 .xkop-line { display: flex; gap: .8em; align-items: baseline;
-  padding: .25em 0; flex-wrap: wrap; }
-.xkop-label { flex: 1 1 auto; min-width: 7em; opacity: .75; }
-.xkop-value { font-weight: bold; white-space: nowrap; }
-.xkop-hint { opacity: .6; font-size: .9em; white-space: nowrap; }
+  padding: .25em 0; justify-content: space-between; }
+.xkop-label { flex: 1 1 auto; min-width: 0; opacity: .75; }
+.xkop-value { flex: 0 0 auto; font-weight: bold; white-space: nowrap; }
+.xkop-hint { flex: 0 0 auto; opacity: .6; font-size: .9em; white-space: nowrap; }
 .xkop-hint-wrap { opacity: .6; font-size: .9em; }
 .xkop-note { opacity: .7; font-size: .9em; margin-top: .4em; }
 .xkop-empty { opacity: .6; }

@@ -81,25 +81,50 @@ diag_system_json() {
 # anything actually gone through it. A table with zero packets on a router that
 # has been up for a day is a different problem from a missing table.
 diag_nft_json() {
-    local present=0 packets=0 dump
+    local present=0 packets=0 dump reason="" tproxy="unknown"
 
     if nft_present; then
         present=1
         dump=$(nft list table inet "$XKOP_NFT_TABLE" 2> /dev/null)
         packets=$(printf '%s' "$dump" | sed -n 's/.*counter packets \([0-9]*\).*/\1/p' \
             | awk '{sum += $1} END {print sum + 0}')
+    else
+        # The reason nft refused is written down when it happens. Reporting
+        # "rules not applied" without it sends the user to the log for
+        # something we already know - and this project does not do that.
+        [ -s "$XKOP_RUN_DIR/nft.err" ] && reason=$(head -n 2 "$XKOP_RUN_DIR/nft.err" 2> /dev/null | tr '\n' ' ')
+
+        # The single most common reason, and one that can be checked instead
+        # of guessed: tproxy is a separate kernel module on OpenWrt, and
+        # without it every rule in the divert chain is a syntax error.
+        if command -v nft > /dev/null 2>&1; then
+            if grep -qs 'nft_tproxy' /proc/modules; then
+                tproxy="loaded"
+            elif [ -e /lib/modules/"$(uname -r)"/nft_tproxy.ko ]; then
+                tproxy="present"
+            else
+                tproxy="missing"
+            fi
+        fi
     fi
 
     jq -nc \
         --argjson present "$present" --argjson packets "${packets:-0}" \
         --arg table "$XKOP_NFT_TABLE" \
+        --arg reason "$reason" \
+        --arg tproxy "$tproxy" \
         '{
             ok: true,
             table: $table,
             rules_present: ($present == 1),
             packets_seen: $packets,
+            reason: (if $reason == "" then null else $reason end),
+            tproxy_module: $tproxy,
             state: (
-                if ($present == 0) then "правил нет"
+                if ($present == 0) and $tproxy == "missing" then
+                    "правил нет: модуль ядра nft_tproxy не установлен"
+                elif ($present == 0) and $reason != "" then "правил нет: " + $reason
+                elif ($present == 0) then "правил нет"
                 elif $packets == 0 then "правила есть, трафик через них ещё не шёл"
                 else "правила работают"
                 end
@@ -227,7 +252,7 @@ diag_global_json() {
                 if ($engine.engine_installed | not) then "движок не установлен"
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
-                elif ($nft.rules_present | not) then "правила nft не применены"
+                elif ($nft.rules_present | not) then $nft.state
                 elif ([$subscriptions[] | select(.state == "ready")] | length) == 0
                      and ($subscriptions | length) > 0 then
                     "подписки не готовы: " + ([$subscriptions[] | .reason // .state] | join(", "))
@@ -280,7 +305,7 @@ diag_dashboard_json() {
                 if ($engine.engine_installed | not) then "движок не установлен"
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
-                elif ($nft.rules_present | not) then "правила nft не применены"
+                elif ($nft.rules_present | not) then $nft.state
                 elif ([$subscriptions[] | select(.state == "ready")] | length) == 0
                      and ($subscriptions | length) > 0 then
                     "подписки не готовы: " + ([$subscriptions[] | .reason // .state] | join(", "))
