@@ -15,6 +15,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/subscription.sh"
 . "$XKOP_LIB_DIR/config.sh"
 . "$XKOP_LIB_DIR/lists.sh"
+. "$XKOP_LIB_DIR/userlists.sh"
 . "$XKOP_LIB_DIR/nft.sh"
 . "$XKOP_LIB_DIR/dnsmasq.sh"
 . "$XKOP_LIB_DIR/canary.sh"
@@ -207,6 +208,9 @@ main() {
             if [ -s "$XKOP_RUN_DIR/canary.json" ]                && [ "$(jq -r ".changed" "$XKOP_RUN_DIR/canary.json")" = "true" ]; then
                 config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
             fi
+            ;;
+        userlists_update)
+            userlist_update_all
             ;;
         configure)
             cmd_configure

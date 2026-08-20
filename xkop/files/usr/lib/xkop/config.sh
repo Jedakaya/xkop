@@ -76,7 +76,15 @@ config_profile_json() {
         --argjson community "$(config_uci_list_json "$id" community_list)" \
         --argjson domain "$(config_uci_list_json "$id" domain)" \
         --argjson subnet "$(config_uci_list_json "$id" subnet)" \
-        '{id: $id, title: $title, community_list: $community, domain: $domain, subnet: $subnet}'
+        --argjson extra_domain "$(userlist_entries_json "$id" domains)" \
+        --argjson extra_subnet "$(userlist_entries_json "$id" subnets)" \
+        '{
+            id: $id,
+            title: $title,
+            community_list: $community,
+            domain: (($domain + $extra_domain) | unique),
+            subnet: (($subnet + $extra_subnet) | unique)
+        }'
 }
 
 config_channel_json() {
