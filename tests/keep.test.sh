@@ -199,6 +199,35 @@ printf 'FI' > "$(nodes_manual_marker)"
 nodes_select auto > /dev/null
 check "автовыбор снимает память о ручном" ""     "$(cat "$(nodes_manual_marker)" 2> /dev/null)"
 
+# --- память не отменяет правило -------------------------------------------
+#
+# Сначала я сделал так, что запомненный узел побеждает безусловно. Это неверно
+# с другой стороны: плохой узел закрепляется навсегда, и роутер сидит на выходе
+# за Wi-Fi с полусекундной задержкой, потому что «так было в прошлый раз».
+
+reset
+rm -f "$(nodes_manual_marker)"
+SELECTION='{"ok":true,"balancer":"pool","selection":"auto","selected":"DE","override":null}'
+STATS='{"observatory":{"nodes":[
+    {"tag":"LV","state":"alive","delay_ms":493},
+    {"tag":"DE","state":"alive","delay_ms":183}]}}'
+subscription_pool_all() { printf '[{"tag":"DE"},{"tag":"LV"}]'; }
+printf 'LV' > "$(nodes_autopin_marker)"
+
+out=$(nodes_keep)
+check "запомненный, но заметно худший — уходим" "switched"     "$(printf '%s' "$out" | "$JQ" -r '.result')"
+check "и уходим на лучший" "DE" "$(pinned)"
+
+# А вот в пределах допуска память держит.
+reset
+STATS='{"observatory":{"nodes":[
+    {"tag":"LV","state":"alive","delay_ms":300},
+    {"tag":"DE","state":"alive","delay_ms":183}]}}'
+printf 'LV' > "$(nodes_autopin_marker)"
+out=$(nodes_keep)
+check "в пределах допуска память держит" "kept"     "$(printf '%s' "$out" | "$JQ" -r '.result')"
+check "именно запомненный" "LV" "$(printf '%s' "$out" | "$JQ" -r '.selected')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

@@ -276,34 +276,23 @@ nodes_keep() {
         return 0
     fi
 
-    # Запомненный узел возвращается раньше любых сравнений.
+    # Память важна ровно там, где судить не по чему.
     #
-    # Сразу после запуска наблюдатель успел измерить не всех: запомненного
-    # среди измеренных может ещё не быть, и тогда сравнение задержек честно
-    # решает, что он «не отвечает», и уходит на первый попавшийся измеренный.
-    # Внешний адрес меняется, speedtest показывает другой сервер, и выглядит
-    # это так, будто память не работает. Она работает — её обгоняет
-    # арифметика, которой нечего сравнивать.
+    # Сначала я сделал так, что запомненный узел побеждает безусловно. Это
+    # неверно с другой стороны: плохой узел закрепляется навсегда, сравнение
+    # задержек не отрабатывает вовсе, и роутер сидит на выходе за Wi-Fi
+    # с полусекундной задержкой, потому что «так было в прошлый раз».
     #
-    # Поэтому: нет закрепления, есть память, узел в пуле и не признан мёртвым —
-    # возвращаем его и уходим. Сравнение задержек своё возьмёт на следующем
-    # круге, когда замеры будут по всем.
-    if [ -z "$override" ] && [ -n "$mine" ]; then
-        if subscription_pool_all | jq -e --arg tag "$mine"             'any(.[]; .tag == $tag)' > /dev/null 2>&1             && ! printf '%s' "$stats" | jq -e --arg tag "$mine"                 '[.observatory.nodes[]? | select(.tag == $tag and .state == "dead")] | length > 0'                 > /dev/null 2>&1; then
-
-            if nodes_api bo -b "$XKOP_BALANCER_TAG" "$mine" > /dev/null 2>&1; then
-                log_info "возвращаю прежний узел: $mine"
-                jq -nc --arg tag "$mine"                     '{ok: true, result: "kept", selected: $tag,
-                      reason: "восстановлен прежний выбор"}'
-                return 0
-            fi
-        fi
-    fi
-
+    # Правильно так: запомненный становится текущим, а дальше работает обычное
+    # правило. Нет о нём замера — держимся его, судить не по чему. Замер есть
+    # и он проигрывает больше допуска — уходим, как и положено.
     best=$(printf '%s' "$alive" | jq -r 'min_by(.delay_ms) | .tag')
     best_delay=$(printf '%s' "$alive" | jq -r 'min_by(.delay_ms) | .delay_ms')
 
     current="$override"
+    if [ -z "$current" ] && [ -n "$mine" ]         && subscription_pool_all | jq -e --arg tag "$mine"             'any(.[]; .tag == $tag)' > /dev/null 2>&1; then
+        current="$mine"
+    fi
     [ -n "$current" ] || current=$(printf '%s' "$selection" | jq -r '.selected // ""')
 
     current_delay=$(printf '%s' "$alive" | jq -r --arg tag "$current" \
@@ -311,6 +300,21 @@ nodes_keep() {
 
     tolerance=$(nodes_switch_tolerance)
     max_delay=$(nodes_max_delay)
+
+    # Замера ещё нет — это не «не отвечает». Сразу после запуска наблюдатель
+    # успел не всех, и объявлять неизмеренного мёртвым значит уходить с него
+    # на первый попавшийся измеренный. Мёртвым его объявляет наблюдатель,
+    # а не наше нетерпение.
+    if [ -n "$current" ] && [ -z "$current_delay" ]         && ! printf '%s' "$stats" | jq -e --arg tag "$current"             '[.observatory.nodes[]? | select(.tag == $tag and .state == "dead")] | length > 0'             > /dev/null 2>&1; then
+
+        if [ -z "$override" ] && nodes_api bo -b "$XKOP_BALANCER_TAG" "$current" > /dev/null 2>&1; then
+            printf '%s' "$current" > "$marker"
+            log_info "замера ещё нет, держусь узла $current"
+        fi
+        jq -nc --arg tag "$current"             '{ok: true, result: "kept", selected: $tag,
+              reason: "замера ещё нет, держусь прежнего выбора"}'
+        return 0
+    fi
 
     if [ -z "$current" ] || [ -z "$current_delay" ]; then
         reason="текущий узел не отвечает"
