@@ -9,6 +9,7 @@ set -u
 
 ROOT=${ROOT:-$(dirname "$0")/..}
 LIB="$ROOT/xkop/files/usr/lib/xkop"
+JQ=${JQ:-jq}
 
 XKOP_LIB_DIR="$LIB"
 # shellcheck source=/dev/null
@@ -81,6 +82,42 @@ access_trim
 after=$(wc -c < "$XKOP_ACCESS_LOG")
 check "разросшийся журнал подрезан" "yes" "$([ "$after" -lt "$before" ] && echo yes || echo no)"
 check "и не обнулён" "yes" "$([ "$after" -gt 0 ] && echo yes || echo no)"
+
+# --- адрес имени и перехват -------------------------------------------------
+#
+# Разбор маршрута отвечал только «правило совпало / не совпало». Этого мало:
+# правило может не совпасть, а сайт при этом жить на адресе, до которого
+# провайдер не даёт дойти. На живом роутере это стоило трёх часов и дампа
+# трафика, хотя ответ - две строки: адрес и есть ли он в наборе.
+
+check "поддельный адрес опознан" "yes"     "$(explain_is_fake 198.18.4.7 && echo yes || echo no)"
+check "вторая половина диапазона тоже" "yes"     "$(explain_is_fake 198.19.250.116 && echo yes || echo no)"
+check "настоящий адрес не поддельный" "no"     "$(explain_is_fake 151.101.67.6 && echo yes || echo no)"
+
+# Опознание держится на двух октетах, а не на разборе маски. Если константа
+# когда-нибудь сменится, упасть должно здесь.
+check "диапазон FakeIP тот, на который рассчитано опознание" "198.18.0.0/15"     "$XKOP_FAKEIP_RANGE"
+
+# Резолвер и ядро подменены: проверяется не сеть, а то, что ответ собран
+# и что «в наборе» и «поддельный» не путаются местами.
+nslookup() {
+    echo "Server:  127.0.0.1"
+    echo "Address: 127.0.0.1:53"
+    echo ""
+    echo "Name:    $1"
+    echo "Address: 151.101.67.6"
+    echo "Address: 198.18.4.7"
+}
+nft_routed_contains() {
+    [ "$1" = "198.18.4.7" ]
+}
+
+addresses=$(explain_addresses example.com)
+
+check "адреса собраны, служебная строка отброшена" "2"     "$(printf '%s' "$addresses" | "$JQ" 'length')"
+check "настоящий адрес вне перехвата" "false"     "$(printf '%s' "$addresses" | "$JQ" -c '.[0].intercepted')"
+check "и он не поддельный" "false"     "$(printf '%s' "$addresses" | "$JQ" -c '.[0].fake')"
+check "поддельный опознан и перехватывается" "true"     "$(printf '%s' "$addresses" | "$JQ" -c '.[1].fake and .[1].intercepted')"
 
 echo "$((total - failed))/$total"
 

@@ -125,6 +125,48 @@ explain_rules() {
     ' "$XKOP_CONFIG_PATH"
 }
 
+# Поддельный ли адрес.
+#
+# Диапазон FakeIP наш собственный и неизменный, поэтому сверяются два первых
+# октета, а не разбирается маска. Что он именно такой, стережёт проверка
+# в tests/explain.test.sh: сменится константа - упадёт она, а не роутер.
+explain_is_fake() {
+    case "$1" in
+        198.18.*.* | 198.19.*.*) return 0 ;;
+    esac
+    return 1
+}
+
+# Во что имя разрешается и попадает ли этот адрес в перехват.
+#
+# «Ни одно правило не совпало» само по себе не отвечает на вопрос, почему сайт
+# не открывается: правило может не совпасть, а сайт при этом жить на адресе,
+# который режет провайдер. Чтобы это увидеть, нужны две вещи — адрес и ответ,
+# есть ли он в наборе. На живом роутере выяснение ровно этого заняло три часа
+# и дамп трафика: App Store уходил напрямую на Fastly, а Fastly у провайдера
+# рвут.
+#
+# Поддельный адрес — не «мимо перехвата», а наоборот: имя ведёт в движок,
+# и решение принимается там, по имени.
+explain_addresses() {
+    local domain="$1" address result='[]' fake inside
+
+    command -v nslookup > /dev/null 2>&1 || { echo 'null'; return 0; }
+
+    for address in $(nslookup "$domain" 127.0.0.1 2> /dev/null \
+        | sed -n 's/^Address[^:]*:[[:space:]]*//p' | grep -v ':'); do
+
+        if explain_is_fake "$address"; then fake=true; else fake=false; fi
+        if nft_routed_contains "$address"; then inside=true; else inside=false; fi
+
+        result=$(printf '%s' "$result" | jq -c \
+            --arg address "$address" --argjson fake "$fake" --argjson inside "$inside" \
+            '. + [{address: $address, fake: $fake, intercepted: $inside}]')
+    done
+
+    printf '%s' "$result"
+}
+
 explain_domain() {
     local domain="$1" observed line outbound reason rules requests probed=0
 
@@ -168,6 +210,7 @@ explain_domain() {
         --argjson probed "$probed" \
         --argjson rules "${rules:-null}" \
         --argjson pool "$(subscription_pool_all)" \
+        --argjson addresses "$(explain_addresses "$domain")" \
         --argjson requests "$requests" \
         '
         ($pool | map(select(.tag == $outbound)) | first) as $node
@@ -197,6 +240,21 @@ explain_domain() {
                 end
             ),
             rule: $rules,
+            addresses: $addresses,
+            hint: (
+                # Один случай стоит отдельной строки, потому что снаружи
+                # выглядит как что угодно, только не как своя причина: имя
+                # ушло напрямую, адрес настоящий, и в перехват он не попадает.
+                # Если сайт при этом не открывается, дело не в маршрутизации,
+                # а в том, что до этого адреса не дают дойти.
+                if $outbound == "direct" and $addresses != null
+                   and (($addresses
+                         | map(select(.fake == false and .intercepted == false))
+                         | length) > 0)
+                then "идёт напрямую, и адрес в перехват не попадает: если сайт не открывается, добавьте его подсеть в профиль"
+                else null
+                end
+            ),
             requests_seen: $requests,
             last_line: (if $line == "" then null else $line end),
             state: (

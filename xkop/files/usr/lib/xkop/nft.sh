@@ -265,6 +265,18 @@ nft_routed_addresses() {
     return 0
 }
 
+# Есть ли адрес в наборе перехвата.
+#
+# Спрашивается у ядра, а не считается по спискам: в наборе лежит то, что туда
+# действительно доехало, со всеми слияниями диапазонов, которые сделал сам nft.
+# Список в настройках и набор в ядре - разные вещи, и расходятся они молча.
+nft_routed_contains() {
+    local address="$1"
+
+    [ -n "$address" ] || return 1
+    nft get element inet "$XKOP_NFT_TABLE" routed4 "{ $address }" > /dev/null 2>&1
+}
+
 nft_apply() {
     local interfaces excluded fakeip=0 exclude_ntp=0 routed=""
 
