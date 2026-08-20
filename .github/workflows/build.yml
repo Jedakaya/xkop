@@ -61,28 +61,22 @@ jobs:
       - id: owner
         run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Build image
+      # Из сборки забирается только каталог с пакетом. Выгружать готовый образ
+      # в демон незачем: SDK весит гигабайты, а пакет — килобайты, и именно
+      # на этой выгрузке сборка висела дольше, чем считалась.
+      - name: Build package
         uses: docker/build-push-action@v6.18.0
         with:
           file: ./Dockerfile-${{ matrix.package_type }}
           context: .
-          load: true
-          tags: xkop:ci-${{ matrix.package_type }}
+          target: artifacts
+          outputs: type=local,dest=./bin/${{ matrix.package_type }}
           build-args: |
             XKOP_VERSION=${{ needs.preparation.outputs.version }}
             SDK_IMAGE=ghcr.io/${{ steps.owner.outputs.name }}/xkop-sdk-${{ matrix.package_type }}:${{ matrix.sdk_version }}
 
-      - name: Create container
-        run: docker create --name ${{ matrix.package_type }} xkop:ci-${{ matrix.package_type }}
-
-      # The whole bin tree is copied and the package is then searched for: the
-      # exact output path differs between SDK releases, and a hardcoded one
-      # fails silently by copying nothing.
-      - name: Copy build output
+      - name: Check output
         run: |
-          mkdir -p ./bin/raw ./bin/${{ matrix.package_type }}
-          docker cp ${{ matrix.package_type }}:/builder/bin/. ./bin/raw/
-          find ./bin/raw -name 'xkop*.${{ matrix.package_type }}' -exec cp {} ./bin/${{ matrix.package_type }}/ ';'
           ls -l ./bin/${{ matrix.package_type }}
           [ -n "$(ls -A ./bin/${{ matrix.package_type }})" ] || { echo "пакет не собрался"; exit 1; }
 
@@ -94,9 +88,6 @@ jobs:
             [ -e "$f" ] || continue
             mv "$f" "./bin/ipk/$(basename "$f" | tr '_' '-')"
           done
-
-      - name: Remove container
-        run: docker rm ${{ matrix.package_type }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4.6.2

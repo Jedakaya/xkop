@@ -1,7 +1,7 @@
 # Build of the xkop ipk package for OpenWrt 23 and 24.
 # See Dockerfile-apk - the prepared SDK image carries everything slow.
 ARG SDK_IMAGE=ghcr.io/jedakaya/xkop-sdk-ipk:24.10.8
-FROM ${SDK_IMAGE}
+FROM ${SDK_IMAGE} AS build
 
 ARG XKOP_VERSION
 ENV XKOP_VERSION=${XKOP_VERSION}
@@ -12,3 +12,11 @@ COPY ./xkop /builder/package/feeds/utilities/xkop
 
 RUN make defconfig \
     && make package/xkop/compile -j1 V=s
+
+# The package is lifted out through an empty final stage: CI needs the file,
+# not an image. Loading the built image into the daemon instead would move the
+# whole SDK - gigabytes of it - for the sake of a few kilobytes.
+RUN mkdir -p /out && find /builder/bin -name 'xkop*.ipk' -exec cp {} /out/ ';'
+
+FROM scratch AS artifacts
+COPY --from=build /out/ /
