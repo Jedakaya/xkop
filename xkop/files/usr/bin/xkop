@@ -227,7 +227,7 @@ main() {
         select)
             # Ручное закрепление снимает метку автоматики: дальше решение
             # принадлежит человеку, и удержание в него не вмешивается.
-            rm -f "$XKOP_RUN_DIR/autopin" 2> /dev/null
+            rm -f "$(nodes_autopin_marker)" 2> /dev/null
             nodes_select "${1:-auto}"
             ;;
         keep)

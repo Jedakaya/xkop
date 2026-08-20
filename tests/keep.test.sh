@@ -29,9 +29,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 XKOP_RUN_DIR="$work/run"
+XKOP_STATE_DIR="$work/state"
 XKOP_BALANCER_TAG=pool
-export XKOP_RUN_DIR XKOP_BALANCER_TAG
-mkdir -p "$XKOP_RUN_DIR"
+export XKOP_RUN_DIR XKOP_STATE_DIR XKOP_BALANCER_TAG
+mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR"
 
 log_info() { :; }
 log_warn() { :; }
@@ -146,6 +147,30 @@ out=$(nodes_keep)
 check "нет измерений — выбор не трогаем" "no_data" \
     "$(printf '%s' "$out" | "$JQ" -r '.result')"
 check "и ничего не закреплено" "" "$(pinned)"
+
+# --- память о выборе переживает перезапуск --------------------------------
+#
+# Сразу после старта замеров ещё нет, и «лучший» узнать не из чего. Без памяти
+# удержание молчит, балансировщик выбирает сам на каждое соединение, и внешний
+# адрес меняется от страницы к странице: speedtest каждый раз показывает
+# другой сервер. Память лежит там, где переживает перезагрузку.
+
+reset
+SELECTION='{"ok":true,"balancer":"pool","selection":"auto","selected":null,"override":null}'
+STATS='{"observatory":{"nodes":[]}}'
+subscription_pool_all() { printf '[{"tag":"DE"},{"tag":"FI"}]'; }
+printf 'FI' > "$(nodes_autopin_marker)"
+
+out=$(nodes_keep)
+check "без замеров держимся прежнего выбора" "kept" "$(printf '%s' "$out" | "$JQ" -r '.result')"
+check "и это именно прежний" "FI" "$(pinned)"
+check "и причина названа" "yes"     "$(printf '%s' "$out" | "$JQ" -r '.reason' | grep -q 'прежнего' && echo yes || echo no)"
+
+# Узел, которого в пуле больше нет, восстанавливать нельзя.
+reset
+printf 'XX' > "$(nodes_autopin_marker)"
+out=$(nodes_keep)
+check "исчезнувший из пула узел не возвращается" "no_data"     "$(printf '%s' "$out" | "$JQ" -r '.result')"
 
 echo "$((total - failed))/$total"
 

@@ -167,8 +167,15 @@ nodes_select() {
 # чужого по метке: в ней записан тег, который закрепили мы.
 XKOP_AUTOPIN_MARKER_NAME='autopin'
 
+# Метка живёт там, где переживает перезагрузку.
+#
+# В /tmp она умирала при каждом перезапуске, а сразу после старта у наблюдателя
+# ещё нет ни одного замера: «лучший» узнать не из чего, удержание честно
+# отвечает «нет данных» и ничего не закрепляет. В эти минуты балансировщик
+# выбирает сам, на каждое соединение может выйти другой узел — и человек
+# видит, что внешний адрес меняется от страницы к странице.
 nodes_autopin_marker() {
-    printf '%s/%s' "$XKOP_RUN_DIR" "$XKOP_AUTOPIN_MARKER_NAME"
+    printf '%s/%s' "$XKOP_STATE_DIR" "$XKOP_AUTOPIN_MARKER_NAME"
 }
 
 nodes_switch_tolerance() {
@@ -201,6 +208,7 @@ nodes_keep() {
 
     override=$(printf '%s' "$selection" | jq -r '.override // ""')
     marker=$(nodes_autopin_marker)
+    mkdir -p "$XKOP_STATE_DIR" 2> /dev/null
     mine=$(cat "$marker" 2> /dev/null)
 
     # Чужое закрепление - решение человека, и оно не обсуждается.
@@ -217,6 +225,19 @@ nodes_keep() {
     [ -n "$alive" ] || alive='[]'
 
     if [ "$(printf '%s' "$alive" | jq 'length')" = "0" ]; then
+        # Замеров ещё нет, но есть память о том, что мы держали в прошлый раз.
+        # Вернуть её — единственный способ не дать балансировщику разбрасывать
+        # соединения по узлам в первые минуты после запуска.
+        if [ -n "$mine" ] && [ -z "$override" ]             && subscription_pool_all | jq -e --arg tag "$mine"                 'any(.[]; .tag == $tag)' > /dev/null 2>&1; then
+
+            if nodes_api bo -b "$XKOP_BALANCER_TAG" "$mine" > /dev/null 2>&1; then
+                log_info "замеров ещё нет, держусь прежнего узла: $mine"
+                jq -nc --arg tag "$mine"                     '{ok: true, result: "kept", selected: $tag,
+                      reason: "замеров ещё нет, держусь прежнего выбора"}'
+                return 0
+            fi
+        fi
+
         jq -nc '{ok: true, result: "no_data",
                  reason: "живых узлов с измеренной задержкой нет, выбор не трогаем"}'
         return 0
