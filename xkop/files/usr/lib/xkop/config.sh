@@ -30,6 +30,7 @@ config_settings_json() {
     jq -nc \
         --arg log_level "$(config_uci_get settings log_level)" \
         --arg metrics_port "$(config_uci_get settings metrics_port)" \
+        --arg api_port "$XKOP_API_PORT_DEFAULT" \
         --arg tproxy_address "$XKOP_TPROXY_ADDRESS" \
         --arg tproxy_port "$XKOP_TPROXY_PORT" \
         --arg strategy "$(config_uci_get settings strategy)" \
@@ -57,6 +58,7 @@ config_settings_json() {
         } + {
             log_level: (if $log_level == "" then "warning" else $log_level end),
             metrics_port: (($metrics_port | tonumber?) // 11111),
+            api_port: (($api_port | tonumber?) // 11112),
             tproxy_address: $tproxy_address,
             tproxy_port: (($tproxy_port | tonumber?) // 1608),
             strategy: (if $strategy == "" then "leastPing" else $strategy end),

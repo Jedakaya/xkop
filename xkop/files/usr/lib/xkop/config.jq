@@ -51,6 +51,17 @@ def policy_section:
 def metrics_section:
     {tag: service_tags.metrics, listen: "127.0.0.1:\(settings.metrics_port // 11111)"};
 
+# The engine's own control interface. Two things need it and neither can be
+# done any other way: asking the balancer which node it is on, and telling it
+# to stay on one. Bound to the loopback - it is unauthenticated and has no
+# business being reachable from anywhere else.
+def api_section:
+    {
+        tag: "api",
+        listen: "127.0.0.1:\(settings.api_port // 11112)",
+        services: ["RoutingService", "ObservatoryService", "StatsService"]
+    };
+
 # Traffic arrives already redirected by nftables, so the inbound only has to
 # accept it. followRedirect is what makes the original destination survive the
 # redirect, and sniffing is what turns it back into a domain for the rules.
@@ -272,6 +283,7 @@ observatory_section as $observatory
     stats: stats_section,
     policy: policy_section,
     metrics: metrics_section,
+    api: api_section,
     inbounds: inbounds_section,
     outbounds: outbounds_section,
     routing: routing_section

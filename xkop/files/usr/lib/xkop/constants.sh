@@ -18,6 +18,10 @@ XKOP_METRICS_PORT_DEFAULT='11111'
 XKOP_METRICS_PATH='/debug/vars'
 XKOP_METRICS_TIMEOUT='3'
 
+# Control interface of the engine: which node the balancer is on, and pinning
+# it to one. Loopback only, unauthenticated by design.
+XKOP_API_PORT_DEFAULT='11112'
+
 # Runtime addresses. xkop and podkop are not meant to run side by side - the
 # package declares the conflict - but the numbers are deliberately different
 # from podkop's anyway. On a router migrated from it, a leftover rule or a
