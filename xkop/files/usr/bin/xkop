@@ -9,17 +9,68 @@
 XKOP_LIB_DIR='/usr/lib/xkop'
 
 . "$XKOP_LIB_DIR/constants.sh"
+. "$XKOP_LIB_DIR/version.sh"
 . "$XKOP_LIB_DIR/stats.sh"
+. "$XKOP_LIB_DIR/subscription.sh"
+
+# Subscriptions, as the panel and LuCI see them: state, reason, what the panel
+# itself said, and how many servers came out. Never empty and never a bare
+# failure - see docs/cli-contract.md.
+cmd_subscriptions() {
+    local id first=1
+
+    printf '['
+    for id in $(subscription_ids); do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        jq -nc \
+            --argjson meta "$(subscription_meta "$id")" \
+            --argjson panel "$(subscription_panel "$id")" \
+            --argjson userinfo "$(subscription_userinfo_of "$id")" \
+            '$meta + {panel: $panel, userinfo: $userinfo}'
+    done
+    printf ']\n'
+}
+
+cmd_subscription_update() {
+    if [ -n "${1:-}" ]; then
+        subscription_update "$1"
+    else
+        subscription_update_all
+    fi
+    cmd_subscriptions
+}
+
+# Compatibility shape: podkop returns an array with a "section" key, and the
+# client panel reads exactly that. The new name is "subscription"; the old key
+# is kept beside it so an unchanged panel keeps working.
+cmd_subscription_userinfo() {
+    local id first=1
+
+    printf '['
+    for id in $(subscription_ids); do
+        [ "$(subscription_userinfo_of "$id")" = "null" ] && continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        jq -nc --arg id "$id" --argjson info "$(subscription_userinfo_of "$id")" \
+            '{subscription: $id, section: $id} + $info'
+    done
+    printf ']\n'
+}
 
 show_help() {
     cat << 'EOF'
 xkop - маршрутизатор трафика на Xray-core
 
 Команды:
-  stats             метрики движка: трафик по исходящим, распределение,
-                    состояние узлов
-  version           версия пакета
-  help              эта справка
+  stats                      метрики движка: трафик по исходящим,
+                             распределение, состояние узлов
+  subscriptions              состояние подписок: что в кэше и что сказала
+                             панель
+  subscription_update [id]   обновить подписку или все сразу
+  get_subscription_userinfo  трафик и срок из заголовка подписки
+  version                    версия пакета
+  help                       эта справка
 
 Всё, кроме help, выводит JSON. Нулевой код возврата означает, что команда
 отработала, а не что всё хорошо: состояние передаётся полями.
@@ -33,6 +84,15 @@ main() {
     case "$command" in
         stats)
             cmd_stats "$@"
+            ;;
+        subscriptions)
+            cmd_subscriptions
+            ;;
+        subscription_update)
+            cmd_subscription_update "$@"
+            ;;
+        get_subscription_userinfo)
+            cmd_subscription_userinfo
             ;;
         version | --version | -v)
             printf '{"version":"%s"}\n' "$XKOP_VERSION"

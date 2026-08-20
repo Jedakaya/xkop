@@ -359,6 +359,16 @@ subscription_save_panel() {
     chmod 600 "$target" 2> /dev/null || true
 }
 
+subscription_userinfo_of() {
+    local file
+    file="$(subscription_dir "$1")/userinfo.json"
+    if [ -s "$file" ]; then
+        cat "$file"
+    else
+        echo 'null'
+    fi
+}
+
 subscription_panel() {
     local file
     file="$(subscription_dir "$1")/panel.json"
