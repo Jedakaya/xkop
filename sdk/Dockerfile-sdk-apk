@@ -9,6 +9,11 @@
 # daily, and a build that cannot be repeated a month later is not a build.
 FROM openwrt/sdk:x86-64-25.12.0
 
+# Links the package to the repository in GHCR. Without it the image is created
+# unattached, and the repository's own Actions token gets 403 on pull - the
+# build then fails on FROM, not on anything of ours.
+LABEL org.opencontainers.image.source="https://github.com/Jedakaya/xkop"
+
 WORKDIR /builder
 
 # setup.sh unpacks the SDK in newer images; older ones do not ship it.

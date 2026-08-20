@@ -6,8 +6,12 @@ on:
       - '*'
   workflow_dispatch:
 
+# Объявленный блок прав ЗАМЕНЯЕТ набор по умолчанию: всё, что здесь не
+# перечислено, выдаётся токену как none. Без packages:read сборка падает на
+# 403 при попытке забрать готовый образ SDK из GHCR.
 permissions:
   contents: write
+  packages: read
 
 jobs:
   preparation:
@@ -102,19 +106,27 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Релиз выпускается по тегу — как в podkop-forge. Сборка по кнопке кладёт
+  # пакет в артефакты и релиза не создаёт: тег нужен только когда меняется
+  # содержимое пакета.
   release:
     name: Create release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [preparation, build]
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5.0.0
+
       - run: mkdir -p ./release
+
       - uses: actions/download-artifact@v4
         with:
           pattern: xkop-*
           merge-multiple: true
           path: ./release
+
       - uses: softprops/action-gh-release@v2.4.0
         with:
           files: ./release/*.*

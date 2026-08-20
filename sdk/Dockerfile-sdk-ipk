@@ -2,6 +2,8 @@
 # See sdk/Dockerfile-sdk-apk for why the slow part lives in a separate image.
 FROM openwrt/sdk:x86-64-24.10.8
 
+LABEL org.opencontainers.image.source="https://github.com/Jedakaya/xkop"
+
 WORKDIR /builder
 
 RUN [ -x ./setup.sh ] && ./setup.sh || true
