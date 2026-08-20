@@ -492,6 +492,9 @@ service_started_check() {
         # В фоне: закрепление спрашивает движок, а start_service_done не место
         # для ожидания.
         (nodes_keep > /dev/null 2>&1 &)
+
+        # И то, что не скачалось, пока движка ещё не было.
+        (subscription_retry_failed > /dev/null 2>&1 &)
         return 0
     fi
 

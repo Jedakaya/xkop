@@ -89,6 +89,47 @@ check "тег проставлен в само исходящее" "true" \
 check "источник запомнен" '["main","main","main","main","spare"]' \
     "$(printf '%s' "$merged" | "$JQ" -c '[.[].subscription]')"
 
+# --- повтор того, что не скачалось при старте -------------------------------
+#
+# На перезапуске подписка обновляется раньше, чем поднялся движок, и попасть
+# в это окно легко. Кэш при этом цел и узлы живы, а в обзоре висит «подписки
+# не готовы» — до следующего срока, потому что WAN никуда не пропадал
+# и триггеру не на что сработать. Повторяем только то, что не скачалось.
+
+XKOP_CACHE_DIR=$(mktemp -d)
+export XKOP_CACHE_DIR
+trap 'rm -rf "$XKOP_CACHE_DIR"' EXIT
+
+log_info() { :; }
+log_warn() { :; }
+log_error() { :; }
+
+# shellcheck source=/dev/null
+. "$ROOT/xkop/files/usr/lib/xkop/subscription.sh"
+
+subscription_ids() { printf 'a
+b
+c
+'; }
+subscription_update() { printf '%s ' "$1" >> "$XKOP_CACHE_DIR/retried"; }
+
+meta_of() {
+    mkdir -p "$(subscription_dir "$1")"
+    "$JQ" -nc --arg s "$2" --arg r "$3" '{state: $s, reason: $r}'         > "$(subscription_dir "$1")/meta.json"
+}
+
+meta_of a stale download_failed
+meta_of b ready ""
+meta_of c blocked hwid_limit
+
+subscription_retry_failed
+check "повторена только неудачная загрузка" "a " "$(cat "$XKOP_CACHE_DIR/retried" 2> /dev/null)"
+
+rm -f "$XKOP_CACHE_DIR/retried"
+meta_of a ready ""
+subscription_retry_failed
+check "повторять нечего - никого не трогаем" "" "$(cat "$XKOP_CACHE_DIR/retried" 2> /dev/null)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
