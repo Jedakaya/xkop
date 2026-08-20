@@ -24,9 +24,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Только apk, пока не понадобится вторая ветка. Образ SDK тяжёлый,
+        # и собирать его впрок незачем.
         include:
           - { package_type: apk, sdk_version: '25.12.0' }
-          - { package_type: ipk, sdk_version: '24.10.8' }
+          # - { package_type: ipk, sdk_version: '24.10.8' }
     steps:
       - uses: actions/checkout@v5.0.0
 

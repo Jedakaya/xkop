@@ -32,9 +32,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Пока собирается только apk. Ветка ipk готова целиком — Dockerfile-ipk
+        # и образ SDK на месте, — и включается одной строкой, когда дойдёт
+        # очередь до роутеров на 23 и 24.
         include:
           - { package_type: apk, sdk_version: '25.12.0' }
-          - { package_type: ipk, sdk_version: '24.10.8' }
+          # - { package_type: ipk, sdk_version: '24.10.8' }
     steps:
       - uses: actions/checkout@v5.0.0
         with:
