@@ -60,6 +60,7 @@ config_settings_json() {
         --arg strategy "$(config_pool_strategy)" \
         --arg probe_url "$(config_uci_get settings probe_url)" \
         --arg probe_interval "$(config_uci_get settings probe_interval)" \
+        --arg engine_mark "${XKOP_NFT_ENGINE_MARK_DEC:-4194304}" \
         --arg buffer_size_kb "$(config_uci_get settings buffer_size_kb)" \
         --arg conn_idle_seconds "$(config_uci_get settings conn_idle_seconds)" \
         --arg handshake_seconds "$(config_uci_get settings handshake_seconds)" \
@@ -104,6 +105,7 @@ config_settings_json() {
             strategy: (if $strategy == "" then "leastLoad" else $strategy end),
             probe_url: (if $probe_url == "" then null else $probe_url end),
             probe_interval: (if $probe_interval == "" then null else $probe_interval end),
+            engine_mark: (($engine_mark | tonumber?) // 4194304),
             buffer_size_kb: (($buffer_size_kb | tonumber?) // 4),
             conn_idle_seconds: (($conn_idle_seconds | tonumber?) // 300),
             handshake_seconds: (($handshake_seconds | tonumber?) // 4)

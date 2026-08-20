@@ -100,6 +100,9 @@ fi)
     chain mangle {
         type filter hook prerouting priority -150; policy accept;
 
+        # Свой трафик движка не трогаем ни при каких условиях.
+        meta mark & $XKOP_NFT_ENGINE_MARK == $XKOP_NFT_ENGINE_MARK return
+
         iifname != @interfaces return
         ip daddr @local4 return
         ip6 daddr @local6 return
@@ -143,6 +146,15 @@ cat << FAKEIP
     # without this the router cannot reach a name it faked for itself.
     chain mangle_output {
         type route hook output priority -150; policy accept;
+
+        # Первым делом - собственный трафик движка.
+        #
+        # Без этого получается петля: движок отправляет соединение наружу,
+        # правило ниже видит адрес из поддельного диапазона и заворачивает
+        # пакет обратно в движок, тот отправляет снова. Тысячи соединений
+        # за секунды, триста пятьдесят мегабайт памяти, OOM и перезагрузка
+        # роутера. Ровно это и наблюдалось на железе.
+        meta mark & $XKOP_NFT_ENGINE_MARK == $XKOP_NFT_ENGINE_MARK return
 
         ip daddr @local4 return
         meta mark & $XKOP_NFT_MARK == $XKOP_NFT_MARK return

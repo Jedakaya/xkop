@@ -114,6 +114,24 @@ check "разметки всего одна, общей больше нет" "1"
 check "без списка адресов метится всё" "yes"     "$(has "$simple" 'meta l4proto { tcp, udp } meta mark set')"
 check "и набора при этом нет" "no" "$(has "$simple" 'set routed4')"
 
+# Собственный трафик движка пропускается не глядя.
+#
+# Без этого получается петля: движок отправляет соединение наружу, правило
+# видит поддельный адрес и заворачивает пакет обратно в движок. Тысячи
+# соединений за секунды, триста пятьдесят мегабайт памяти, OOM и перезагрузка.
+# На живом роутере в conntrack было шесть тысяч записей на собственный адрес.
+check "разметка пропускает трафик движка" "yes"     "$(has "$simple" "meta mark & $XKOP_NFT_ENGINE_MARK == $XKOP_NFT_ENGINE_MARK return")"
+check "и цепочка вывода тоже" "yes"     "$(has "$fake" "meta mark & $XKOP_NFT_ENGINE_MARK == $XKOP_NFT_ENGINE_MARK return")"
+
+# И пропуск обязан стоять раньше разметки, иначе он бесполезен.
+skip_line=$(printf '%s' "$fake" | sed -n '/chain mangle_output/,/^    }/p'     | grep -n "$XKOP_NFT_ENGINE_MARK" | head -n 1 | cut -d: -f1)
+mark_line=$(printf '%s' "$fake" | sed -n '/chain mangle_output/,/^    }/p'     | grep -n 'meta mark set' | head -n 1 | cut -d: -f1)
+check "пропуск раньше разметки" "yes"     "$([ "$skip_line" -lt "$mark_line" ] && echo yes || echo no)"
+
+# Метки не должны совпадать: одна отвечает «это надо перехватить»,
+# другая — «это мы сами».
+check "метки различаются" "yes"     "$([ "$XKOP_NFT_MARK" != "$XKOP_NFT_ENGINE_MARK" ] && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

@@ -272,6 +272,20 @@ def dns_section:
 # Интерфейс наружу задаётся только когда его назвали. По умолчанию решает
 # таблица маршрутизации роутера, и это правильное поведение: привязка к имени
 # интерфейса ломается ровно там, где его переименовали или где их два.
+# Метка на собственные исходящие сокеты движка.
+#
+# Она и разрывает петлю: правила nft пропускают помеченный ею трафик, вместо
+# того чтобы заворачивать его обратно в движок. Ставится на каждый исходящий,
+# включая пришедшие из подписки, и аккуратно подмешивается к их собственным
+# streamSettings, а не затирает их.
+def engine_mark: (settings.engine_mark // 4194304);
+
+def with_engine_mark($o):
+    ($o.streamSettings // {}) as $ss
+    | $o + {
+        streamSettings: ($ss + {sockopt: (($ss.sockopt // {}) + {mark: engine_mark})})
+      };
+
 def output_sockopt:
     (settings.output_interface // "")
     | if . == "" then {} else {sockopt: {interface: .}} end;
@@ -303,8 +317,11 @@ def service_outbounds:
 def node_outbounds:
     [ .pool[]? | .outbound ];
 
+# Blackhole никуда не соединяется, и streamSettings ему не нужны: метка
+# ставится всем, кто действительно ходит наружу.
 def outbounds_section:
-    service_outbounds + node_outbounds;
+    [ (service_outbounds + node_outbounds)[]
+      | if .protocol == "blackhole" then . else with_engine_mark(.) end ];
 
 # One balancer over the whole pool. The engine excludes nodes the observatory
 # calls dead by itself, so quarantine is native and ours only to display.

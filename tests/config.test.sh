@@ -157,7 +157,21 @@ dns_case '{"output_interface": "wan2", "dns_extra": []}'
 check "интерфейс наружу проставлен прямому исходящему" '"wan2"' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.interface')"
 
 dns_case '{"dns_extra": []}'
-check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings // null')"
+check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.interface // null')"
+
+# --- метка собственного трафика движка ------------------------------------
+#
+# Без неё получается петля: движок отправляет соединение наружу, правило
+# в цепочке вывода видит поддельный адрес и заворачивает пакет обратно
+# в движок. Тысячи соединений за секунды, триста пятьдесят мегабайт памяти,
+# OOM и перезагрузка роутера — ровно это и наблюдалось на железе.
+
+check "метка стоит на прямом исходящем" '4194304' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.mark')"
+check "и на служебном dns" '4194304' "$(q dns-case.json '.outbounds[] | select(.tag == "dns-out") | .streamSettings.sockopt.mark')"
+check "чёрной дыре она не нужна" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "block") | .streamSettings // null')"
+check "метка есть у всех, кто ходит наружу" 'true' "$(q dns-case.json '[.outbounds[] | select(.protocol != "blackhole") | .streamSettings.sockopt.mark] | all(. == 4194304)')"
+
+
 
 # --- журнал доступа и уровень подробности --------------------------------
 #
