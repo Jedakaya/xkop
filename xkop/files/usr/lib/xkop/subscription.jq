@@ -475,9 +475,20 @@ def from_links($subscription):
           end
     );
 
+# A panel answers a refusal with a server rather than an error: a single entry
+# on 0.0.0.0 port 1 whose name is a sentence for the user - "Достигнут лимит
+# устройств", "Приложение не поддерживается". Checked on a live panel. Counting
+# that as a server would show a healthy subscription with one node that can
+# never connect, which is exactly the kind of lie this project exists to avoid.
+def is_placeholder:
+    (.address == null or .address == "" or .address == "0.0.0.0" or .address == "::")
+    or (.port == null);
+
+def drop_placeholders: map(select(is_placeholder | not));
+
 def pool($subscription; $format):
-    if $format == "xray-config-list" then from_xray_config_list($subscription)
-    elif $format == "xray-json" then from_xray_json($subscription)
+    if $format == "xray-config-list" then from_xray_config_list($subscription) | drop_placeholders
+    elif $format == "xray-json" then from_xray_json($subscription) | drop_placeholders
     else []
     end;
 
@@ -551,12 +562,12 @@ if $mode == "pool" then
     pool($subscription; $format)
 elif $mode == "count" then
     (if $format == "link-list" then
-        from_links($subscription) | .servers | length
+        from_links($subscription) | .servers | drop_placeholders | length
      else
         pool($subscription; $format) | length
      end)
 elif $mode == "links" then
-    from_links($subscription)
+    from_links($subscription) | .servers |= drop_placeholders
 elif $mode == "merge" then
     merge
 else

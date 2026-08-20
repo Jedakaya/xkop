@@ -245,6 +245,46 @@ subscription_save_userinfo() {
     chmod 600 "$target" 2> /dev/null || true
 }
 
+# xkop asks under its own name. Measured on a live panel, and the result is
+# worth stating precisely, because the obvious conclusion is the wrong one:
+#
+#   - the FORMAT is chosen by the path. "<url>/json" and "<url>/v2ray-json"
+#     both return whole Xray configs; the bare url returns a link list. Our own
+#     User-Agent gets the Xray format from those paths just as well as any
+#     recognized client does.
+#   - the CONTENT is unlocked by the device headers. Without X-HWID and the
+#     rest the panel answers with a single stub server on port 1, whatever the
+#     agent and whatever the path.
+#
+# So there is no reason to introduce ourselves as Happ or v2rayN. Passing for
+# another client bought exactly nothing that the path suffix does not give.
+XKOP_AGENT_DEFAULT="xkop/${XKOP_VERSION:-dev}"
+
+# Tried in order; every one that answers contributes to the pool. A panel that
+# does not know a suffix answers 404, which costs one request and is skipped.
+XKOP_SOURCE_SUFFIXES='/json /v2ray-json ='
+
+# uci list values may contain spaces, which the plain "uci get" spelling loses.
+# On a router the OpenWrt helper does it properly; off a router it degrades to
+# splitting, which is good enough for tests and never runs in production.
+subscription_config_list() {
+    local section="$1" option="$2"
+
+    if [ -f /lib/functions.sh ]; then
+        # shellcheck source=/dev/null
+        . /lib/functions.sh
+        config_load "$XKOP_CONFIG" 2> /dev/null
+        config_list_foreach "$section" "$option" _subscription_print_item
+        return 0
+    fi
+
+    uci -q get "$XKOP_CONFIG.$section.$option" 2> /dev/null | tr ' ' '\n' | grep -v '^$' || true
+}
+
+_subscription_print_item() {
+    printf '%s\n' "$1"
+}
+
 subscription_device_model() {
     if [ -f /tmp/sysinfo/model ]; then
         cat /tmp/sysinfo/model 2> /dev/null
@@ -274,6 +314,61 @@ subscription_hwid() {
         "$(echo "$raw" | cut -c9-12)" "$(echo "$raw" | cut -c13-16)"
 }
 
+# Panels put their own value in headers, base64 encoded when it is text.
+subscription_header_value() {
+    local headers="$1" name="$2" value
+
+    value=$(grep -i "^$name:" "$headers" 2> /dev/null | head -n 1 | tr -d '\r')
+    [ -n "$value" ] || return 0
+    value="${value#*: }"
+
+    case "$value" in
+        base64:*) printf '%s' "${value#base64:}" | base64 -d 2> /dev/null ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
+# What the panel says about itself and about us. This is the difference between
+# "серверов нет" and "достигнут лимит устройств": the panel states the reason
+# outright, and passing it through beats anything we could infer.
+subscription_save_panel() {
+    local headers="$1" id="$2" target
+
+    [ -s "$headers" ] || return 0
+    target="$(subscription_dir "$id")/panel.json"
+
+    jq -nc \
+        --arg title "$(subscription_header_value "$headers" 'profile-title')" \
+        --arg announce "$(subscription_header_value "$headers" 'announce')" \
+        --arg page "$(subscription_header_value "$headers" 'profile-web-page-url')" \
+        --arg interval "$(subscription_header_value "$headers" 'profile-update-interval')" \
+        --arg hwid_active "$(subscription_header_value "$headers" 'x-hwid-active')" \
+        --arg hwid_limit "$(subscription_header_value "$headers" 'x-hwid-limit')" \
+        --arg hwid_reached "$(subscription_header_value "$headers" 'x-hwid-max-devices-reached')" \
+        '{
+            title: (if $title == "" then null else $title end),
+            announce: (if $announce == "" then null else $announce end),
+            web_page: (if $page == "" then null else $page end),
+            update_interval_days: (if $interval == "" then null else ($interval | tonumber? // null) end),
+            hwid: {
+                active: ($hwid_active == "true"),
+                limited: ($hwid_limit == "true"),
+                max_devices_reached: ($hwid_reached == "true")
+            }
+        }' > "$target.tmp" && mv "$target.tmp" "$target"
+    chmod 600 "$target" 2> /dev/null || true
+}
+
+subscription_panel() {
+    local file
+    file="$(subscription_dir "$1")/panel.json"
+    if [ -s "$file" ]; then
+        cat "$file"
+    else
+        echo 'null'
+    fi
+}
+
 # One request with one User-Agent. Different agents get different formats and
 # different sets of servers from the same panel, which is why they are asked
 # separately rather than one being chosen - see docs/subscription.md.
@@ -295,4 +390,211 @@ subscription_fetch_one() {
         -H "Accept-Language: ru-RU,en,*" \
         -H "X-Device-Locale: EN" \
         -D "$headers" -o "$outfile" "$url" 2> /dev/null
+}
+
+# The refresh itself. Every failure path here is written so that the router
+# ends up no worse than it started: a bad answer never replaces a good cache,
+# and a subscription that cannot be reached keeps serving what it already has.
+subscription_update() {
+    local id="$1"
+    local url enabled include exclude dir work agents_file
+    local agent n=0 ok=0 failed=0 fmt pool servers
+    local merged count old_count fingerprint rejected now
+    local agents_meta='[]'
+
+    url=$(uci -q get "$XKOP_CONFIG.$id.url" 2> /dev/null)
+    enabled=$(uci -q get "$XKOP_CONFIG.$id.enabled" 2> /dev/null)
+    [ -n "$enabled" ] || enabled=1
+    include=$(uci -q get "$XKOP_CONFIG.$id.include" 2> /dev/null)
+    exclude=$(uci -q get "$XKOP_CONFIG.$id.exclude" 2> /dev/null)
+
+    dir=$(subscription_dir "$id")
+    now=$(date +%s)
+    old_count=$(subscription_pool "$id" | jq 'length' 2> /dev/null)
+    [ -n "$old_count" ] || old_count=0
+
+    # An absent link is not a failure. In podkop it ended startup outright, and
+    # before the scheduled jobs were installed - the router was then left
+    # without a single way back.
+    if [ -z "$url" ] || [ "$enabled" = "0" ]; then
+        subscription_write_meta "$id" "absent" "no_url" "$now" 0 "$agents_meta"
+        return 0
+    fi
+
+    mkdir -p "$dir" "$XKOP_RUN_DIR"
+    chmod 700 "$dir" 2> /dev/null || true
+    work="$XKOP_RUN_DIR/subscription-$id"
+    rm -rf "$work"
+    mkdir -p "$work"
+
+    # One line per source: what to ask with, and what to ask for. By default
+    # the agent is ours and the paths differ; a subscription may add agents of
+    # its own for a panel that keys the format off the client instead.
+    agents_file="$work/sources"
+    : > "$agents_file"
+    for suffix in $XKOP_SOURCE_SUFFIXES; do
+        [ "$suffix" = "=" ] && suffix=""
+        printf '%s\t%s\n' "$XKOP_AGENT_DEFAULT" "$url$suffix" >> "$agents_file"
+    done
+    subscription_config_list "$id" user_agent 2> /dev/null \
+        | while IFS= read -r extra; do
+            [ -n "$extra" ] && printf '%s\t%s\n' "$extra" "$url" >> "$agents_file"
+        done
+
+    while IFS="$(printf '\t')" read -r agent source_url; do
+        [ -n "$agent" ] || continue
+        [ -n "$source_url" ] || source_url="$url"
+        n=$((n + 1))
+
+        if ! subscription_fetch_one "$source_url" "$agent" "$work/ua-$n.payload" "$work/ua-$n.headers"; then
+            failed=$((failed + 1))
+            agents_meta=$(printf '%s' "$agents_meta" | jq -c \
+                --arg a "$agent" --arg p "${source_url#"$url"}" \
+                '. + [{agent: $a, path: $p, ok: false, format: null, servers: 0}]')
+            continue
+        fi
+
+        subscription_decompress_gzip "$work/ua-$n.payload"
+        fmt=$(subscription_detect_format "$work/ua-$n.payload")
+        pool=$(subscription_pool_of "$work/ua-$n.payload" "$fmt" "$id")
+        [ -n "$pool" ] || pool='[]'
+        printf '%s' "$pool" > "$work/pool-$n.json"
+        servers=$(printf '%s' "$pool" | jq 'length' 2> /dev/null)
+        [ -n "$servers" ] || servers=0
+
+        ok=$((ok + 1))
+        agents_meta=$(printf '%s' "$agents_meta" | jq -c \
+            --arg a "$agent" --arg p "${source_url#"$url"}" --arg f "$fmt" --argjson s "$servers" \
+            '. + [{agent: $a, path: $p, ok: true, format: $f, servers: $s}]')
+
+        if [ -s "$work/ua-$n.headers" ]; then
+            subscription_save_userinfo "$work/ua-$n.headers" "$id"
+            subscription_save_panel "$work/ua-$n.headers" "$id"
+        fi
+    done < "$agents_file"
+
+    if [ "$ok" -eq 0 ]; then
+        # Nothing arrived. The cache is left exactly as it was.
+        if [ "$old_count" -gt 0 ]; then
+            subscription_write_meta "$id" "stale" "download_failed" "$now" "$old_count" "$agents_meta"
+        else
+            subscription_write_meta "$id" "empty" "download_failed" "$now" 0 "$agents_meta"
+        fi
+        rm -rf "$work"
+        return 0
+    fi
+
+    merged=$(cat "$work"/pool-*.json 2> /dev/null | jq -s -c \
+        --arg mode merge --arg subscription "$id" --arg format "" \
+        --arg include "$include" --arg exclude "$exclude" \
+        -f "$XKOP_LIB_DIR/subscription.jq" 2> /dev/null)
+    [ -n "$merged" ] || merged='[]'
+    count=$(printf '%s' "$merged" | jq 'length' 2> /dev/null)
+    [ -n "$count" ] || count=0
+
+    fingerprint=$(cat "$work"/ua-*.payload 2> /dev/null | md5sum | cut -d' ' -f1)
+    rejected=$(cat "$dir/rejected" 2> /dev/null)
+
+    if [ "$count" -eq 0 ]; then
+        # The panel refused, and said why. Passing its own words through beats
+        # reporting "серверов нет" and letting the interface guess: a device
+        # limit is not an empty subscription, and the fix is different.
+        if [ "$(subscription_panel "$id" | jq -r '.hwid.max_devices_reached // false')" = "true" ]; then
+            subscription_write_meta "$id" "blocked" "hwid_limit" "$now" "$old_count" "$agents_meta"
+            rm -rf "$work"
+            return 0
+        fi
+
+        # An answer with nothing usable in it. Remembering its fingerprint
+        # keeps the next cycle from raising the same alarm over the same
+        # rubbish, and the previous pool stays in place.
+        if [ -n "$fingerprint" ] && [ "$fingerprint" = "$rejected" ]; then
+            if [ "$old_count" -gt 0 ]; then
+                subscription_write_meta "$id" "stale" "unchanged_rejected" "$now" "$old_count" "$agents_meta"
+            else
+                subscription_write_meta "$id" "rejected" "unchanged_rejected" "$now" 0 "$agents_meta"
+            fi
+        else
+            printf '%s' "$fingerprint" > "$dir/rejected"
+            if [ "$old_count" -gt 0 ]; then
+                subscription_write_meta "$id" "stale" "empty_answer" "$now" "$old_count" "$agents_meta"
+            else
+                subscription_write_meta "$id" "empty" "empty_answer" "$now" 0 "$agents_meta"
+            fi
+        fi
+        rm -rf "$work"
+        return 0
+    fi
+
+    # Only here, with servers in hand, is the cache replaced - and by moving
+    # files into place, never by writing over the ones in use.
+    for f in "$work"/ua-*.payload; do
+        [ -f "$f" ] || continue
+        cp "$f" "$dir/$(basename "$f").tmp" && mv "$dir/$(basename "$f").tmp" "$dir/$(basename "$f")"
+    done
+    printf '%s' "$merged" > "$dir/pool.json.tmp" && mv "$dir/pool.json.tmp" "$dir/pool.json"
+    printf '%s' "$url" > "$dir/url.tmp" && mv "$dir/url.tmp" "$dir/url"
+    rm -f "$dir/rejected"
+    chmod 600 "$dir"/* 2> /dev/null || true
+
+    subscription_write_meta "$id" "ready" "" "$now" "$count" "$agents_meta"
+    rm -rf "$work"
+    return 0
+}
+
+subscription_write_meta() {
+    local id="$1" state="$2" reason="$3" now="$4" servers="$5" agents="$6"
+    local dir updated
+    dir=$(subscription_dir "$id")
+    mkdir -p "$dir"
+
+    updated=$(subscription_meta "$id" | jq -r '.updated_at // empty' 2> /dev/null)
+    [ "$state" = "ready" ] && updated="$now"
+
+    jq -nc \
+        --arg id "$id" --arg state "$state" --arg reason "$reason" \
+        --argjson tried "$now" --argjson servers "$servers" --argjson agents "$agents" \
+        --arg updated "$updated" \
+        '{
+            subscription: $id,
+            state: $state,
+            reason: (if $reason == "" then null else $reason end),
+            tried_at: $tried,
+            updated_at: (if $updated == "" then null else ($updated | tonumber) end),
+            servers: $servers,
+            agents: $agents
+        }' > "$dir/meta.json.tmp" && mv "$dir/meta.json.tmp" "$dir/meta.json"
+    chmod 600 "$dir/meta.json" 2> /dev/null || true
+}
+
+# Every subscription section of the configuration.
+subscription_ids() {
+    uci -q show "$XKOP_CONFIG" 2> /dev/null \
+        | sed -n "s/^$XKOP_CONFIG\.\([^.=]*\)=subscription$/\1/p"
+}
+
+subscription_update_all() {
+    local id
+    for id in $(subscription_ids); do
+        subscription_update "$id"
+    done
+}
+
+# The merged pool of every subscription that has servers - what the
+# configuration generator reads. A subscription in trouble contributes
+# nothing and stops nothing.
+subscription_pool_all() {
+    local id work
+    work="$XKOP_RUN_DIR/pool-all.$$"
+    mkdir -p "$XKOP_RUN_DIR"
+    : > "$work"
+
+    for id in $(subscription_ids); do
+        subscription_pool "$id" >> "$work"
+        echo >> "$work"
+    done
+
+    jq -s -c --arg mode merge --arg subscription "" --arg format "" \
+        -f "$XKOP_LIB_DIR/subscription.jq" < "$work" 2> /dev/null || echo '[]'
+    rm -f "$work"
 }
