@@ -32,6 +32,12 @@ config settings 'settings'
 	option switch_tolerance_ms '200'
 	# Задержка, выше которой узел меняют, даже если он лучший. 0 — не смотреть.
 	option max_delay_ms '0'
+	# Буфер на направление соединения, КБ. Умолчание движка — 512, оно
+	# рассчитано на настольную машину: на роутере это сотни мегабайт
+	# и смерть от нехватки памяти.
+	option buffer_size_kb '4'
+	option conn_idle_seconds '300'
+	option handshake_seconds '4'
 	option log_level 'warn'
 	option metrics_port '11111'
 	option dont_touch_dhcp '0'

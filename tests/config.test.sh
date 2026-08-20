@@ -184,6 +184,23 @@ check "выбранная стратегия доезжает до баланс�
 dns_case '{"strategy": "leastLoad", "dns_extra": []}'
 check "у leastLoad появляются пороги против скачков" '["300ms","600ms","1s"]' "$(q dns-case.json '.routing.balancers[0].strategy.settings.baselines')"
 
+# --- буферы -------------------------------------------------------------
+#
+# Умолчание движка — 512 КБ на направление каждого соединения, оно рассчитано
+# на настольную машину. На роутере это сотни мегабайт: движок вырос до 350 МБ
+# при 496 МБ всего, ядро вызвало OOM-killer, админка перестала отвечать,
+# роутер ушёл в перезагрузку, а задержки узлов выросли втрое — и это легко
+# принять за качество подписки.
+
+dns_case '{"dns_extra": []}'
+check "буфер прижат" '4' "$(q dns-case.json '.policy.levels."0".bufferSize')"
+check "простой соединения ограничен" '300' "$(q dns-case.json '.policy.levels."0".connIdle')"
+check "после закрытия одной стороны ждём секунду" '1' "$(q dns-case.json '.policy.levels."0".uplinkOnly')"
+check "счётчики трафика не потеряны" 'true' "$(q dns-case.json '.policy.system.statsOutboundUplink')"
+
+dns_case '{"buffer_size_kb": 64, "dns_extra": []}'
+check "буфер настраивается" '64' "$(q dns-case.json '.policy.levels."0".bufferSize')"
+
 # --- источники целиком в туннель ------------------------------------------
 
 dns_case '{"fully_routed_ip": ["192.168.1.10", "192.168.1.11"], "dns_extra": []}'

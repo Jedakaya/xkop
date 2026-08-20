@@ -76,13 +76,37 @@ def probe_inbound:
 # counters stay at zero - both halves are needed, see docs/stats.md.
 def stats_section: {};
 
+# Буферы. Без этого раздела движок берёт свои умолчания, а они рассчитаны
+# на настольную машину: 512 КБ на каждое направление каждого соединения.
+#
+# На роутере, через который идёт весь трафик, это сотни мегабайт: движок
+# вырос до 350 МБ при 496 МБ всего, ядро вызвало OOM-killer и убило его,
+# админка перестала отвечать, а роутер ушёл в перезагрузку. Задержки узлов
+# при этом выросли втрое - и я принял это за качество подписки, хотя это
+# задыхался сам роутер.
+#
+# Числа - те же, что в руководствах по Xray на роутерах: буфер в килобайтах,
+# рукопожатие и простой в секундах. uplinkOnly и downlinkOnly - сколько ждать
+# после закрытия одной стороны; секунда вместо умолчальных двух и пяти
+# освобождает соединения заметно раньше.
 def policy_section:
-    {system: {
-        statsInboundUplink: true,
-        statsInboundDownlink: true,
-        statsOutboundUplink: true,
-        statsOutboundDownlink: true
-    }};
+    {
+        levels: {
+            "0": {
+                handshake: (settings.handshake_seconds // 4),
+                connIdle: (settings.conn_idle_seconds // 300),
+                uplinkOnly: 1,
+                downlinkOnly: 1,
+                bufferSize: (settings.buffer_size_kb // 4)
+            }
+        },
+        system: {
+            statsInboundUplink: true,
+            statsInboundDownlink: true,
+            statsOutboundUplink: true,
+            statsOutboundDownlink: true
+        }
+    };
 
 def metrics_section:
     {tag: service_tags.metrics, listen: "127.0.0.1:\(settings.metrics_port // 11111)"};

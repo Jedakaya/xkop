@@ -60,6 +60,9 @@ config_settings_json() {
         --arg strategy "$(config_pool_strategy)" \
         --arg probe_url "$(config_uci_get settings probe_url)" \
         --arg probe_interval "$(config_uci_get settings probe_interval)" \
+        --arg buffer_size_kb "$(config_uci_get settings buffer_size_kb)" \
+        --arg conn_idle_seconds "$(config_uci_get settings conn_idle_seconds)" \
+        --arg handshake_seconds "$(config_uci_get settings handshake_seconds)" \
         --arg block_client_doh "$(config_uci_get settings block_client_doh)" \
         --arg disable_quic "$(config_uci_get settings disable_quic)" \
         --arg dns_mode "$(config_uci_get settings dns_mode)" \
@@ -100,7 +103,10 @@ config_settings_json() {
             tproxy_port: (($tproxy_port | tonumber?) // 1608),
             strategy: (if $strategy == "" then "leastLoad" else $strategy end),
             probe_url: (if $probe_url == "" then null else $probe_url end),
-            probe_interval: (if $probe_interval == "" then null else $probe_interval end)
+            probe_interval: (if $probe_interval == "" then null else $probe_interval end),
+            buffer_size_kb: (($buffer_size_kb | tonumber?) // 4),
+            conn_idle_seconds: (($conn_idle_seconds | tonumber?) // 300),
+            handshake_seconds: (($handshake_seconds | tonumber?) // 4)
         }'
 }
 
