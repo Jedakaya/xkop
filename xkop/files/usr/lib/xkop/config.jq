@@ -304,8 +304,33 @@ def dns_section:
             ((settings.dns_parallel // "0") == "1")
             or (((settings.dns_extra // []) | length) > 0)
         ),
+
+        # Кэш ответов.
+        #
+        # По умолчанию он нужен: без него каждое имя спрашивается заново,
+        # а на задушенном DoH это видно как «интернет думает». Но бывает
+        # обратное: имя живёт на двух CDN сразу, ответы чередуются, и один
+        # из них у провайдера не работает. Тогда закреплённый ответ делает
+        # сайт мёртвым до конца TTL, а без кэша следующая попытка попадает
+        # на живой адрес.
+        #
+        # Ключ проверен самим движком; поля переписи TTL, как rewrite_ttl
+        # у sing-box, в Xray нет вовсе - есть только это.
+        disableCache: ((settings.dns_cache // "1") == "0"),
+
+        # Подсказка о том, откуда спрашивают.
+        #
+        # Без неё резолвер решает по собственному расположению, а не по нашему,
+        # и CDN выдаёт узел не той страны. На живом роутере это видно прямо:
+        # обычным UDP Apple отвечает то одним CDN, то другим, а по DoH почти
+        # всегда дальним. Адрес берётся из настроек и не угадывается: назвать
+        # тут внутренний адрес роутера хуже, чем не назвать ничего.
+        clientIp: (
+            if (settings.dns_client_ip // "") == "" then null
+            else settings.dns_client_ip end
+        ),
         servers: dns_servers
-    };
+    } | with_entries(select(.value != null));
 
 # Service outbounds, always present and always named the same: the stats
 # command derives traffic roles from these tags, and a rename here silently

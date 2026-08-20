@@ -71,6 +71,8 @@ config_settings_json() {
         --arg dns_type "$(config_uci_get settings dns_type)" \
         --arg dns_bootstrap "$(config_uci_get settings dns_bootstrap)" \
         --arg dns_parallel "$(config_uci_get settings dns_parallel)" \
+        --arg dns_cache "$(config_uci_get settings dns_cache)" \
+        --arg dns_client_ip "$(config_uci_get settings dns_client_ip)" \
         --arg output_interface "$(config_uci_get settings output_interface)" \
         --arg dns_address "$XKOP_DNS_INBOUND_ADDRESS" \
         --arg dns_port "$XKOP_DNS_INBOUND_PORT" \
@@ -86,6 +88,8 @@ config_settings_json() {
             dns_type: (if $dns_type == "" then "doh" else $dns_type end),
             dns_bootstrap: $dns_bootstrap,
             dns_parallel: (if $dns_parallel == "" then "0" else $dns_parallel end),
+            dns_cache: (if $dns_cache == "" then "1" else $dns_cache end),
+            dns_client_ip: $dns_client_ip,
             output_interface: $output_interface,
             dns_address: $dns_address,
             dns_port: (($dns_port | tonumber?) // 53),
