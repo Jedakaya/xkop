@@ -83,6 +83,85 @@ for lib in $(sed -n 's|^\. "\$XKOP_LIB_DIR/\(.*\)"$|\1|p' "$ROOT/xkop/files/usr/
 done
 check "все подключаемые библиотеки существуют" "" "$missing"
 
+# Переменная не должна использоваться раньше, чем задана.
+#
+# Установщик работает с `set -u`, поэтому такая ошибка не видна ни `sh -n`,
+# ни глазами: она вылезает только при запуске, на роутере, и обрывает установку
+# на середине. Именно так уехал блок «возвращаем службу как было» — вставился
+# на 360 строк выше места, где переменная появляется.
+#
+# Смотрим только то, что вне тел функций: внутри функции переменная может
+# использоваться и раньше присваивания, потому что вызовут её позже.
+early=$(awk '
+    # Однострочная функция открывается и закрывается на той же строке,
+    # и принимать её за начало тела значит объявить весь остаток файла телом.
+    /^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{.*\}[[:space:]]*$/ { next }
+    /^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{/ { infunc = 1; next }
+    infunc && /^\}/                    { infunc = 0; next }
+    infunc                             { next }
+    {
+        line = $0
+        if (match(line, /^[[:space:]]*(export )?[A-Z][A-Z0-9_]*=/)) {
+            name = line
+            sub(/^[[:space:]]*(export )?/, "", name)
+            sub(/=.*/, "", name)
+            if (!(name in setat)) setat[name] = NR
+        }
+        rest = line
+        while (match(rest, /[$]\{?[A-Z][A-Z0-9_]+/)) {
+            name = substr(rest, RSTART, RLENGTH)
+            sub(/^[$]\{?/, "", name)
+            if (!(name in useat)) useat[name] = NR
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+    }
+    END {
+        for (n in useat) {
+            if (n == "XKOP_REPO" || n == "XKOP_REF" || n == "XKOP_FROM_BRANCH" ||
+                n == "XKOP_NO_ENGINE" || n == "XKOP_KEEP_PODKOP" || n == "GITHUB_TOKEN" ||
+                n == "PATH" || n == "TMPDIR" || n == "IFS" || n == "OPENWRT_ARCH") continue
+            if (!(n in setat) || setat[n] > useat[n]) printf "%s ", n
+        }
+    }
+' "$ROOT/install.sh")
+
+check "переменные задаются раньше, чем используются" "" "$(echo $early)"
+
+# Проверка обязана ловить, а не только соглашаться. Иначе она просто мебель.
+broken="$(mktemp)"
+cat > "$broken" << 'BROKEN'
+#!/bin/sh
+set -u
+say() { echo "$*"; }
+if [ "$LATE" -eq 1 ]; then say "рано"; fi
+LATE=0
+BROKEN
+caught=$(awk '
+    /^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{.*\}[[:space:]]*$/ { next }
+    /^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{/ { infunc = 1; next }
+    infunc && /^\}/                    { infunc = 0; next }
+    infunc                             { next }
+    {
+        if (match($0, /^[[:space:]]*(export )?[A-Z][A-Z0-9_]*=/)) {
+            name = $0
+            sub(/^[[:space:]]*(export )?/, "", name)
+            sub(/=.*/, "", name)
+            if (!(name in setat)) setat[name] = NR
+        }
+        rest = $0
+        while (match(rest, /[$]\{?[A-Z][A-Z0-9_]+/)) {
+            name = substr(rest, RSTART, RLENGTH)
+            sub(/^[$]\{?/, "", name)
+            if (!(name in useat)) useat[name] = NR
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+    }
+    END { for (n in useat) if (!(n in setat) || setat[n] > useat[n]) printf "%s ", n }
+' "$broken")
+rm -f "$broken"
+
+check "и ловит, когда порядок нарушен" "LATE" "$(echo $caught)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
