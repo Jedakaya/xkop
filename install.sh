@@ -544,6 +544,140 @@ reclaim_flash_space
 free_kb=$(overlay_free_kb)
 [ -n "$free_kb" ] && note "свободно на /overlay: ${free_kb} КБ"
 
+# --- podkop, если он тут стоит --------------------------------------------
+
+# Заменить podkop, не заставляя убирать его руками.
+#
+# Это не только удобство: пакет xkop объявляет конфликт с podkop, и на роутере
+# с ним установка просто откажет. Но снять пакеты мало — podkop правит чужое
+# состояние, и брошенное на полпути оно оставляет роутер без имён:
+#
+#   - dnsmasq смотрит на 127.0.0.42, а прежние резолверы спрятаны под ключами
+#     podkop_*. Снять пакет, не вернув их, значит оставить роутер без DNS;
+#   - таблица nft, правило и таблица маршрутизации, задачи в cron;
+#   - строка "105 podkop" в /etc/iproute2/rt_tables;
+#   - sing-box, который без podkop никому не нужен и занимает флэш.
+#
+# Поэтому порядок такой: сначала его собственный stop — он и есть штатный
+# разбор, — потом возврат dnsmasq, и только затем удаление пакетов. Если
+# удаление упрётся в место или права, роутер всё равно останется с именами.
+podkop_present() {
+    [ -x /usr/bin/podkop ] && return 0
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk list --installed 2> /dev/null | grep -q '^podkop-'
+    else
+        opkg list-installed 2> /dev/null | grep -q '^podkop '
+    fi
+}
+
+# Что стоит прямо сейчас. Без этого установщик молча делал вид, что ставит
+# начисто, и человек не понимал, обновление у него или переустановка того же.
+installed_version() {
+    # awk, а не sed: в этом окружении обратные слэши в генерируемом тексте
+    # съедаются, и «слэш-единица» превращается в управляющий байт. Выражение
+    # при этом выглядит целым, а подстановка молча ломается — проект
+    # предупреждает об этом отдельным разделом, и здесь это уже случилось.
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk list --installed 2> /dev/null | awk '
+            /^xkop-[0-9]/ { v = $1; sub("^xkop-", "", v); sub("-r[0-9]+$", "", v); print v; exit }'
+    else
+        opkg list-installed 2> /dev/null | awk '
+            $1 == "xkop" { v = $3; sub("-r[0-9]+$", "", v); print v; exit }'
+    fi
+}
+
+pkg_drop() {
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk del "$1" > /dev/null 2>&1
+    else
+        opkg remove --force-depends "$1" > /dev/null 2>&1
+    fi
+}
+
+# Возврат резолверов, спрятанных podkop под свои ключи. Делается до удаления
+# пакетов и независимо от того, чем закончится удаление.
+podkop_dnsmasq_restore() {
+    local value
+
+    command -v uci > /dev/null 2>&1 || return 0
+    [ -n "$(uci -q get "dhcp.@dnsmasq[0].podkop_server")" ] || return 0
+
+    uci -q delete "dhcp.@dnsmasq[0].server"
+    for value in $(uci -q get "dhcp.@dnsmasq[0].podkop_server"); do
+        uci -q add_list "dhcp.@dnsmasq[0].server=$value"
+    done
+    uci -q delete "dhcp.@dnsmasq[0].podkop_server"
+
+    for value in noresolv cachesize; do
+        saved=$(uci -q get "dhcp.@dnsmasq[0].podkop_$value")
+        if [ -n "$saved" ]; then
+            uci -q set "dhcp.@dnsmasq[0].$value=$saved"
+            uci -q delete "dhcp.@dnsmasq[0].podkop_$value"
+        else
+            uci -q delete "dhcp.@dnsmasq[0].$value"
+        fi
+    done
+
+    uci commit dhcp
+    /etc/init.d/dnsmasq restart > /dev/null 2>&1
+    note "прежние резолверы возвращены на место"
+}
+
+podkop_remove() {
+    local pkg
+
+    say "podkop"
+    note "найден podkop, убираю"
+
+    [ -x /etc/init.d/podkop ] && /etc/init.d/podkop stop > /dev/null 2>&1
+    [ -x /usr/bin/podkop ] && /usr/bin/podkop stop > /dev/null 2>&1
+    [ -x /etc/init.d/podkop ] && /etc/init.d/podkop disable > /dev/null 2>&1
+
+    podkop_dnsmasq_restore
+
+    for pkg in luci-i18n-podkop-ru luci-app-podkop podkop; do
+        pkg_drop "$pkg"
+    done
+
+    # sing-box уходит следом: он был движком podkop и без него не нужен,
+    # а места занимает больше самого podkop. Настройки движка остаются.
+    if [ -x /etc/init.d/sing-box ]; then
+        /etc/init.d/sing-box stop > /dev/null 2>&1
+        /etc/init.d/sing-box disable > /dev/null 2>&1
+    fi
+    pkg_drop sing-box
+
+    # Хвосты, до которых stop мог не добраться: если служба уже была сломана,
+    # разбирать было некому.
+    nft delete table inet PodkopTable > /dev/null 2>&1
+    while ip rule list 2> /dev/null | grep -q 'lookup podkop'; do
+        ip -4 rule del table podkop 2> /dev/null || break
+    done
+    ip route flush table podkop > /dev/null 2>&1
+    sed -i '/105 podkop/d' /etc/iproute2/rt_tables 2> /dev/null
+
+    if command -v crontab > /dev/null 2>&1; then
+        crontab -l 2> /dev/null | grep -v '/usr/bin/podkop' | crontab - 2> /dev/null
+        /etc/init.d/cron reload > /dev/null 2>&1
+    fi
+
+    # /etc/config/podkop остаётся намеренно: это настройки человека, и если он
+    # решит вернуться, переписывать их заново незачем.
+    if podkop_present; then
+        warn "podkop убрать до конца не вышло, установка может упереться в конфликт"
+    else
+        note "podkop убран, /etc/config/podkop оставлен"
+    fi
+}
+
+if podkop_present; then
+    if [ "${XKOP_KEEP_PODKOP:-0}" = "1" ]; then
+        warn "podkop оставлен по XKOP_KEEP_PODKOP — пакет xkop с ним конфликтует"
+    else
+        podkop_remove
+    fi
+fi
+
 say "зависимости"
 note "менеджер: $(pkg_format)"
 pkg_list_update || warn "индекс не обновился, ставлю на том, что есть"
@@ -586,7 +720,14 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
         ENGINE_URL=$(asset_url "xray-xkop-" "-$ARCH.$FORMAT")
 
         if [ -n "$XKOP_URL" ]; then
-            note "версия $VERSION"
+            HAVE=$(installed_version)
+            if [ -z "$HAVE" ]; then
+                note "ставлю $VERSION"
+            elif [ "$HAVE" = "$VERSION" ]; then
+                note "уже стоит $VERSION, переустанавливаю её же"
+            else
+                note "обновляю $HAVE -> $VERSION"
+            fi
 
             file_unowned /usr/bin/xkop && branch_install_remove
 
@@ -737,7 +878,11 @@ echo
 /usr/bin/xkop check_engine
 
 echo
-echo "== установлено ($INSTALLED_FROM)"
+if [ -n "${HAVE:-}" ] && [ -n "${VERSION:-}" ] && [ "$HAVE" != "$VERSION" ]; then
+    echo "== обновлено: $HAVE -> $VERSION ($INSTALLED_FROM)"
+else
+    echo "== установлено ($INSTALLED_FROM)"
+fi
 echo
 echo "Дальше — ссылка подписки и запуск:"
 echo

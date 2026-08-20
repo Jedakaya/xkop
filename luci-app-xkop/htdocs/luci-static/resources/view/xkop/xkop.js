@@ -90,6 +90,9 @@ const CSS = `
 .xkop-hint-wrap { opacity: .6; font-size: .9em; }
 .xkop-note { opacity: .7; font-size: .9em; margin-top: .4em; }
 .xkop-empty { opacity: .6; }
+.xkop-log { margin: .4em 0 0 0; padding: .5em; font-size: .8em; line-height: 1.35;
+  max-height: 9em; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  background: rgba(128,128,128,.12); border-radius: 4px; }
 .xkop-sub { padding: .4em 0; border-bottom: 1px solid rgba(128,128,128,.15); }
 .xkop-sub:last-child { border-bottom: none; }
 .xkop-details { margin-top: .6em; }

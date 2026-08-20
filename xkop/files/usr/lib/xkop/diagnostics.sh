@@ -264,6 +264,23 @@ diag_global_json() {
         }'
 }
 
+# Последние слова движка.
+#
+# «Запущен, но не отвечает» — состояние, в котором интерфейс обязан показать
+# не диагноз, а улику: процесс есть, эндпоинт молчит, и почему — знает только
+# сам движок. procd отдаёт его вывод в syslog, оттуда и берём. Спрашивается
+# только когда есть что объяснять: на здоровом роутере это лишняя работа.
+diag_engine_log_json() {
+    local lines
+
+    command -v logread > /dev/null 2>&1 || { printf '[]'; return 0; }
+
+    lines=$(logread 2> /dev/null | grep -i 'xray' | tail -n 6)
+    [ -n "$lines" ] || { printf '[]'; return 0; }
+
+    printf '%s' "$lines" | jq -R -s -c 'split("\n") | map(select(. != ""))'
+}
+
 # Everything the overview shows, in one process.
 #
 # The dashboard used to run five commands per render, and two of them asked
@@ -274,7 +291,7 @@ diag_global_json() {
 # What asks the network stays out of here on purpose. Live probes belong to a
 # button the user presses, not to opening a page.
 diag_dashboard_json() {
-    local stats pool answering=0 nodes_count
+    local stats pool answering=0 nodes_count engine_log
 
     # Всё, что стоит дорого, добывается ровно один раз и передаётся дальше.
     # Раньше метрики забирались трижды, пул собирался дважды, а движок
@@ -286,7 +303,15 @@ diag_dashboard_json() {
     [ -n "$nodes_count" ] || nodes_count=0
     [ "$(printf '%s' "$stats" | jq -r '.ok')" = "true" ] && answering=1
 
+    # Улика прикладывается только к состоянию, которое её требует: процесс
+    # есть, эндпоинт молчит. На здоровом роутере это лишняя работа.
+    engine_log='[]'
+    if [ "$answering" = "0" ] && engine_process_running; then
+        engine_log=$(diag_engine_log_json)
+    fi
+
     jq -nc \
+        --argjson engine_log "$engine_log" \
         --argjson status "$(service_status_json "$nodes_count" "$answering")" \
         --argjson engine "$(cmd_check_engine)" \
         --argjson nft "$(diag_nft_json)" \
@@ -305,6 +330,7 @@ diag_dashboard_json() {
             system: ($system + {uptime: $uptime}),
             service: $status,
             engine: $engine,
+            engine_log: $engine_log,
             nft: $nft,
             subscriptions: $subscriptions,
             lists_present: $lists,

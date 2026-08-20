@@ -15,13 +15,18 @@ include $(TOPDIR)/rules.mk
 #
 #   make package/xray-xkop/compile XKOP_TARGET_ARCH=aarch64_cortex-a53
 #
-# The version is pinned deliberately. Blind updates to the newest release would
-# hand a regression to the whole fleet at once - v26.4.15 and v26.4.17 had a
-# routing one - so the checked version is raised by hand, after it has run on
-# our own router. Same reasoning as install.md.
+# The version is pinned deliberately: a blind jump to the newest release would
+# hand a regression to the whole fleet at once, so it is raised by hand.
+#
+# What it is NOT pinned by is the "prerelease" flag. That rule was here, and it
+# was wrong: XTLS marks every release since v26.3.27 as preliminary - all of
+# them, for months on end - so following the flag meant standing still while
+# the clients people actually use moved on. Checked against the API, not
+# assumed: v26.7.28, v26.7.11, v26.6.27, v26.5.9 are all flagged, v26.3.27 is
+# the last one that is not.
 
 PKG_NAME:=xray-xkop
-PKG_VERSION:=26.3.27
+PKG_VERSION:=26.7.28
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Jedakaya
@@ -49,17 +54,17 @@ XRAY_ASSET_mips64el:=Xray-linux-mips64le
 XRAY_ASSET_mips64:=Xray-linux-mips64
 XRAY_ASSET_riscv64:=Xray-linux-riscv64
 
-XRAY_HASH_Xray-linux-64:=23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae
-XRAY_HASH_Xray-linux-32:=d1eeb0d9a9106eefd286fbb73595c2dfe1c48c56aa91ba1c9aefe04f188d0927
-XRAY_HASH_Xray-linux-arm64-v8a:=4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c
-XRAY_HASH_Xray-linux-arm32-v7a:=c7265ae13c63ca0241a037df4ef960ad37938c8a67d984cc08834b2cfdf5654b
-XRAY_HASH_Xray-linux-arm32-v6:=0c6e751e2bba3f3ff09a793dd6a6bc45fd6fd89f49b49dfc0cf6d922dc123bec
-XRAY_HASH_Xray-linux-arm32-v5:=0da9a632e15e82504831f61bf6b46c21e3081bcc79ad46bdc16e7dc2f0dc9088
-XRAY_HASH_Xray-linux-mips32le:=fe1ded07a64fe0a406c6c1089f09b6c2999fc2309509ca4c98d93469c0cbf9df
-XRAY_HASH_Xray-linux-mips32:=a562f2edbdabc0f1a17eee2226fa9f710e6b61c2d5e2bf3435157b5ce40b1c67
-XRAY_HASH_Xray-linux-mips64le:=7f660cb026ab9251bd70c30ecf383243d133eb098c57287bf3f4e0c01c66c898
-XRAY_HASH_Xray-linux-mips64:=40432515e6d98033b3934a38dc4f2dac1801e80e3da88c3d230310d17e79dca7
-XRAY_HASH_Xray-linux-riscv64:=627ea5870b6fd05d95b7f4ceb5a54d7f2664dd075b30a7ac46ee9a6f9653d6f8
+XRAY_HASH_Xray-linux-64:=8195d909f1109b8f3d99eefe401a3c451d7bf4af71f24d3815420f77e5dd2a40
+XRAY_HASH_Xray-linux-32:=87ee3f90e48fe4b930c69ba4bcf7376a44e9b6caebbe8d4479b3b795c8ff3fa2
+XRAY_HASH_Xray-linux-arm64-v8a:=f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501
+XRAY_HASH_Xray-linux-arm32-v7a:=a23cae6991ea1224e4e3381cae4ada8c3d5afc438a851ab0b2eda2f391dc4072
+XRAY_HASH_Xray-linux-arm32-v6:=8a6e29f36d16a25ea4c80ddabf1cca79f9d06e73a7a2170dc1b5726d6b8afda5
+XRAY_HASH_Xray-linux-arm32-v5:=f11efbba5174b0f676d332153a60f261e896415de072e0553440ba9cee7b0c06
+XRAY_HASH_Xray-linux-mips32le:=4779e1afba7dea12c64a72380f1d9737a12359f354014625a7f9d96f8d31e3fa
+XRAY_HASH_Xray-linux-mips32:=aec600118fd1e7ee42e8d5e8d5c82cc5e8139e82ff1da029e9b81b7170fc028c
+XRAY_HASH_Xray-linux-mips64le:=5e5f28532e8bde40fdb3dd3133487119147a39dd6e611ea53b830c7dc10d6ad1
+XRAY_HASH_Xray-linux-mips64:=f2da91e931b0df28ca8a8c71d8c0a8f17aa2be6f9798e6874d46d66197aa2fd9
+XRAY_HASH_Xray-linux-riscv64:=aba048426d8a3381751e53c54af6f84c9f831d881dc28aed77bd7b40bc1814c0
 
 # The OpenWrt architecture is "family_cpu", and the family is what decides the
 # binary: aarch64_cortex-a53 and aarch64_generic take the same one.

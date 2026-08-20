@@ -239,3 +239,54 @@ lists_update() {
     log_info "список доменов обновлён, ${size_kb} КБ"
     return 0
 }
+
+# Состояние списков: что лежит на диске и насколько оно свежее.
+#
+# «Списки есть» отвечало на другой вопрос. Настоящий звучит так: скачались ли
+# они все, и когда. Категория, выбранная в профиле, но не приехавшая, — это
+# сайты, которые молча идут мимо туннеля, и заметить это иначе нечем.
+lists_status_json() {
+    local target used category file entries updated
+
+    target=$(lists_geosite_path)
+    used=$(uci -q show "$XKOP_CONFIG" 2> /dev/null \
+        | sed -n "s/^$XKOP_CONFIG\.[^.]*\.community_list='\{0,1\}\(.*\)'\{0,1\}$/\1/p" \
+        | tr -d "'" | tr ' ' '\n' | sort -u | grep -v '^$')
+
+    {
+        printf '['
+        local first=1
+        for category in $used; do
+            lists_subnet_has "$category" || continue
+            file=$(lists_subnet_path "$category")
+            entries=$(lists_subnet_entries "$category" | grep -c . 2> /dev/null)
+            [ -n "$entries" ] || entries=0
+            updated=$(date -r "$file" +%s 2> /dev/null)
+            [ -n "$updated" ] || updated=0
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            jq -nc --arg c "$category" --argjson e "$entries" --argjson u "$updated" \
+                '{category: $c, subnets: $e, updated: (if $u == 0 then null else $u end),
+                  ready: ($e > 0)}'
+        done
+        printf ']'
+    } > "$XKOP_RUN_DIR/subnet-status.json" 2> /dev/null
+
+    jq -nc \
+        --argjson geosite_present "$([ -s "$target" ] && echo true || echo false)" \
+        --argjson geosite_size "$(wc -c < "$target" 2> /dev/null || echo 0)" \
+        --argjson geosite_updated "$(date -r "$target" +%s 2> /dev/null || echo 0)" \
+        --argjson subnets "$(cat "$XKOP_RUN_DIR/subnet-status.json" 2> /dev/null || echo '[]')" \
+        --argjson categories "$(printf '%s' "$used" | jq -R -s -c 'split("\n") | map(select(. != ""))')" \
+        '{
+            ok: true,
+            geosite: {
+                present: $geosite_present,
+                size_bytes: $geosite_size,
+                updated: (if $geosite_updated == 0 then null else $geosite_updated end)
+            },
+            categories: $categories,
+            subnets: $subnets,
+            missing: [ $subnets[] | select(.ready | not) | .category ]
+        }'
+}

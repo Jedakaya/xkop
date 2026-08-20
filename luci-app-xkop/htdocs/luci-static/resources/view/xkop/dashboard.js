@@ -115,6 +115,16 @@ function renderServiceWidget(data, refresh) {
       _("Поставить: xkop update, либо переустановить установщиком с GitHub.")));
   }
 
+  // Движок работает, а эндпоинт молчит — тут интерфейс обязан показать улику,
+  // а не диагноз: почему именно, знает только сам движок. Ровно так нашлось
+  // исчерпание дескрипторов, которое снаружи выглядело чем угодно другим.
+  const log = (data && data.engine_log) || [];
+  if (log.length) {
+    body.push(E("div", { class: "xkop-warn-text" }, _("Движок запущен, но не отвечает.")));
+    body.push(E("div", { class: "xkop-note" }, _("Его последние слова:")));
+    body.push(E("pre", { class: "xkop-log" }, log.join(String.fromCharCode(10))));
+  }
+
   body.push(E("div", { class: "xkop-controls" }, [
     running ? act("restart", _("Перезапустить"), "cbi-button-apply")
             : act("start", _("Запустить"), "cbi-button-apply"),
@@ -578,7 +588,8 @@ return L.Class.extend({
         return renderSummary(data);
       });
 
-      fill("service", key([svc.state, svc.enabled, eng.engine_installed, eng.engine_version]),
+      fill("service", key([svc.state, svc.enabled, eng.engine_installed, eng.engine_version,
+        (data.engine_log || []).length]),
         function () { return renderServiceWidget(data, refresh); });
 
       fill("traffic", key([st.ok, st.error,

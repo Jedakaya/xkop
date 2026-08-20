@@ -25,7 +25,7 @@ set -eu
 # Newest release XTLS does not mark as prerelease. Everything after it is
 # published as prerelease, so "latest" from the API stops here - and taking a
 # prerelease blindly is exactly what docs/install.md forbids.
-XRAY_VERSION=${XRAY_VERSION:-v26.3.27}
+XRAY_VERSION=${XRAY_VERSION:-v26.7.28}
 XRAY_TARGET=${XRAY_TARGET:-/usr/bin/xray}
 WORK=/tmp/xkop-xray-install
 

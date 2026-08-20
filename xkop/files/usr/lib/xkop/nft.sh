@@ -186,8 +186,46 @@ nft_routing_rule_remove() {
 # Адреса, ради которых стоит будить движок: поддельный диапазон плюс подсети
 # всех профилей, привязанных к непрямым каналам. Ручные подсети, списки
 # сообщества и списки по ссылке — всё это уже сведено в профиль.
+# Только то, что nft точно примет: адрес IPv4 или подсеть IPv4.
+#
+# В набор идут подсети профилей, а туда попадает всё, что положил человек или
+# отдал список по ссылке. Набор применяется одним файлом, целиком или никак,
+# поэтому ОДНО негодное значение отменяет весь набор правил - и роутер
+# остаётся без маршрутизации, продолжая раздавать клиентам поддельные адреса.
+# Внешне это выглядит как «перезапустил движок, и всё умерло».
+#
+# Записано без регулярных выражений: та же причина, что и в jq-программах.
+nft_valid_subnet() {
+    local value="$1" addr prefix octet count=0
+
+    case "$value" in
+        *[!0-9./]*) return 1 ;;
+        */*)
+            addr="${value%%/*}"
+            prefix="${value#*/}"
+            case "$prefix" in
+                '' | *[!0-9]* | *.*) return 1 ;;
+            esac
+            [ "$prefix" -le 32 ] || return 1
+            ;;
+        *) addr="$value" ;;
+    esac
+
+    IFS=. 
+    for octet in $addr; do
+        case "$octet" in
+            '' | *[!0-9]*) unset IFS; return 1 ;;
+        esac
+        [ "$octet" -le 255 ] || { unset IFS; return 1; }
+        count=$((count + 1))
+    done
+    unset IFS
+
+    [ "$count" -eq 4 ]
+}
+
 nft_routed_addresses() {
-    local id channel profile
+    local id channel profile value dropped=0
 
     printf '%s
 ' "$XKOP_FAKEIP_RANGE"
@@ -200,8 +238,19 @@ nft_routed_addresses() {
         profile=$(config_uci_get "$id" profile)
         [ -n "$profile" ] || continue
 
-        config_profile_json "$profile" 2> /dev/null | jq -r '.subnet[]?' 2> /dev/null
+        for value in $(config_profile_json "$profile" 2> /dev/null             | jq -r '.subnet[]?' 2> /dev/null); do
+            if nft_valid_subnet "$value"; then
+                printf '%s
+' "$value"
+            else
+                dropped=$((dropped + 1))
+            fi
+        done
     done
+
+    [ "$dropped" -gt 0 ]         && log_warn "в наборе перехвата пропущено негодных подсетей: $dropped" >&2
+
+    return 0
 }
 
 nft_apply() {
@@ -235,7 +284,23 @@ nft_apply() {
     nft delete table inet "$XKOP_NFT_TABLE" 2> /dev/null || true
 
     if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "$routed"         | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+
+        # Отказ набора — это роутер без маршрутизации, поэтому вторая попытка
+        # без выборочного перехвата. Она проще: ни одного значения снаружи,
+        # только наши собственные. Пусть через движок пойдёт лишнее — это
+        # медленнее, но работает, а «ничего не работает» не лечится ничем.
         log_error "правила nft отвергнуты: $(head -n 1 "$XKOP_RUN_DIR/nft.err" 2> /dev/null)"
+
+        if [ -n "$routed" ]; then
+            log_warn "повторяю без выборочного перехвата"
+            if nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" ""                 | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+                nft_routing_rule
+                log_info "правила nft применены без выборочного перехвата"
+                return 0
+            fi
+            log_error "и без него отвергнуты: $(head -n 1 "$XKOP_RUN_DIR/nft.err" 2> /dev/null)"
+        fi
+
         return 1
     fi
 
