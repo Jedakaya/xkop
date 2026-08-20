@@ -21,8 +21,8 @@ include $(INCLUDE_DIR)/package.mk
 define Package/xkop
 	SECTION:=net
 	CATEGORY:=Network
-	DEPENDS:=+curl +jq +gzip +coreutils-base64 +nftables +kmod-nft-tproxy
-	CONFLICTS:=podkop luci-app-passwall luci-app-passwall2
+	DEPENDS:=+curl +jq +gzip +coreutils-base64 +nftables +kmod-nft-tproxy +bind-dig
+	CONFLICTS:=podkop luci-app-passwall luci-app-passwall2 https-dns-proxy nextdns
 	TITLE:=Traffic router on Xray-core
 	URL:=https://github.com/Jedakaya/xkop
 	PKGARCH:=all
@@ -58,6 +58,16 @@ define Package/xkop/install
 
 	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PKG_VERSION)/g' $(1)/usr/lib/xkop/constants.sh
 endef
+
+# bind-dig и список конфликтов взяты у podkop, где они куплены отказами.
+#
+# dig нужен Канарейке: busybox nslookup не даёт задать тип запроса и не всегда
+# отличает NXDOMAIN от пустого ответа, а весь смысл Канарейки в том, чтобы
+# различать «имени нет» и «подсунули адрес».
+#
+# https-dns-proxy и nextdns переписывают dnsmasq под себя. Стоять рядом они
+# могут только до первого перезапуска, после чего резолвер оказывается чужим,
+# и выяснять это на живом роутере дорого.
 
 define Package/xkop/prerm
 #!/bin/sh

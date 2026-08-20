@@ -339,6 +339,30 @@ branch_install_remove() {
     # /etc/config/xkop остаётся: это единственный файл, где не наше состояние.
 }
 
+# --- возвращаем службу как было -------------------------------------------
+
+if [ "$WAS_RUNNING" -eq 1 ]; then
+    say "служба"
+    /etc/init.d/xkop restart > /dev/null 2>&1
+
+    # Запущено и работает - разные утверждения, и различать их тут и есть
+    # смысл проверки.
+    started=0
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if [ "$(/usr/bin/xkop get_status 2> /dev/null | jq -r '.engine.answering // false' 2> /dev/null)" = "true" ]; then
+            started=1
+            break
+        fi
+        sleep 2
+    done
+
+    if [ "$started" -eq 1 ]; then
+        note "служба работала до обновления и снова работает"
+    else
+        warn "служба не поднялась после обновления, смотри: logread -e xkop"
+    fi
+fi
+
 # --- панель ---------------------------------------------------------------
 
 # Адрес выводится, а не вшивается: dnsmasq отдаёт <имя>.<домен>, и «openwrt.lan»
@@ -537,6 +561,16 @@ ARCH=$(router_arch)
 note "архитектура: $ARCH, пакеты $FORMAT"
 
 # --- пакетами, если есть релиз --------------------------------------------
+
+# Работала ли служба до нашего вмешательства.
+#
+# prerm пакета останавливает её, а обратно не поднимает никто: обновление
+# по скрипту оставляло роутер со свежими файлами и остановленным движком,
+# и выглядело это как «поставил и всё сломалось». Возвращаем как было.
+WAS_RUNNING=0
+if [ -x /usr/bin/xkop ]     && [ "$(/usr/bin/xkop get_status 2> /dev/null | jq -r '.engine.running // false' 2> /dev/null)" = "true" ]; then
+    WAS_RUNNING=1
+fi
 
 INSTALLED_FROM=""
 SHA="$XKOP_REF"

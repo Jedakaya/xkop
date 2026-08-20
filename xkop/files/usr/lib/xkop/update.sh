@@ -92,19 +92,71 @@ update_check_json() {
         }'
 }
 
+# Рабочий каталог менеджера — в RAM.
+#
+# Индекс и распакованный архив это ровно та временная запись, которая первой
+# отказывает на почти полной флэш-памяти. На большинстве сборок /var и так
+# ведёт в tmpfs, но не на всех, а сомнение здесь стоит неудавшегося
+# обновления. Взято из установщика podkop.
+update_prepare_ram() {
+    TMPDIR=/tmp
+    export TMPDIR
+    mkdir -p "$XKOP_RUN_DIR" 2> /dev/null
+}
+
+# Освобождает флэш, который целиком кэш: всё перечисленное восстанавливается
+# по требованию и для работы роутера не нужно. Кэш apk и списки opkg под /var
+# не трогаются: там tmpfs, флэша они не стоят, а их вычистка заставит заново
+# качать весь индекс — на этом в podkop начинались отказы из-за одного
+# капризного фида.
+update_reclaim_flash() {
+    local before after freed
+
+    before=$(df -k /overlay 2> /dev/null | awk 'NR==2 {print $4}')
+
+    rm -rf /usr/lib/opkg/lists/* 2> /dev/null
+    rm -rf /usr/lib/opkg/tmp/* 2> /dev/null
+    rm -f /var/log/*.old /var/log/*.gz 2> /dev/null
+
+    after=$(df -k /overlay 2> /dev/null | awk 'NR==2 {print $4}')
+    [ -n "$before" ] && [ -n "$after" ] || return 0
+    freed=$((after - before))
+    [ "$freed" -gt 0 ] && log_info "освобождено кэша: ${freed} КБ"
+    return 0
+}
+
+# Хватит ли места — спрашивает сам менеджер сухим прогоном.
+#
+# Он учитывает место, которое вернёт удаляемая старая версия, чего сравнение
+# размеров не умеет: в podkop фиксированный порог сам по себе отказывал
+# роутерам, которым нужен был мегабайт. Менеджер, не знающий флага, не имеет
+# права читаться как «не поместится» — иначе он заблокирует любое обновление.
+update_would_fit() {
+    local out rc
+
+    if command -v apk > /dev/null 2>&1; then
+        out=$(apk add --allow-untrusted --upgrade --simulate "$1" 2>&1)
+    else
+        out=$(opkg install --noaction "$1" 2>&1)
+    fi
+    rc=$?
+
+    [ $rc -eq 0 ] && return 0
+
+    if printf '%s' "$out" | grep -qiE 'unrecognized option|invalid option|unknown option|usage:'; then
+        return 0
+    fi
+
+    log_error "менеджер отказал на сухом прогоне: $(printf '%s' "$out" | head -n 1)"
+    return 1
+}
+
 update_install_file() {
-    local file="$1" size_kb free_kb
+    local file="$1"
 
     [ -s "$file" ] || return 1
 
-    size_kb=$(( ($(wc -c < "$file") + 1023) / 1024 ))
-    free_kb=$(df -k /overlay 2> /dev/null | awk 'NR==2 {print $4}')
-    [ -n "$free_kb" ] || free_kb=$(df -k / 2> /dev/null | awk 'NR==2 {print $4}')
-
-    if [ -n "$free_kb" ] && [ "$free_kb" -lt "$size_kb" ]; then
-        log_error "не хватает места: нужно ${size_kb} КБ, свободно ${free_kb} КБ ($(basename "$file"))"
-        return 2
-    fi
+    update_would_fit "$file" || return 2
 
     if command -v apk > /dev/null 2>&1; then
         apk add --allow-untrusted --upgrade "$file" > /dev/null 2>&1
@@ -196,6 +248,9 @@ update_apply() {
     format=$(update_pkg_format)
     arch=$(update_router_arch)
     installed=$(update_installed_version)
+
+    update_prepare_ram
+    update_reclaim_flash
 
     if ! update_latest_json; then
         jq -nc '{ok: false, error: "releases_unreachable"}'
