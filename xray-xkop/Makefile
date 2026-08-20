@@ -33,7 +33,11 @@ XKOP_TARGET_ARCH ?= $(ARCH)
 # OpenWrt architecture -> the asset XTLS publishes for it. The mips split is
 # the one that matters: "uname -m" says "mips" for both endiannesses, and a big
 # endian binary on a little endian router does not run at all.
-XRAY_ASSET_x86_64:=Xray-linux-64
+# The family is the part before the underscore, and for x86_64 that is "x86":
+# the architecture string splits into "x86" and "64" like every other one, and
+# the sixty-four goes where the CPU name goes for the rest of them. Missing
+# that made this the only architecture of eight that did not build.
+XRAY_ASSET_x86:=Xray-linux-64
 XRAY_ASSET_i386:=Xray-linux-32
 XRAY_ASSET_aarch64:=Xray-linux-arm64-v8a
 XRAY_ASSET_arm:=Xray-linux-arm32-v7a
@@ -61,6 +65,13 @@ XRAY_HASH_Xray-linux-riscv64:=627ea5870b6fd05d95b7f4ceb5a54d7f2664dd075b30a7ac46
 # binary: aarch64_cortex-a53 and aarch64_generic take the same one.
 XKOP_ARCH_FAMILY:=$(firstword $(subst _, ,$(XKOP_TARGET_ARCH)))
 XRAY_ASSET:=$(XRAY_ASSET_$(XKOP_ARCH_FAMILY))
+
+# An unknown architecture stops the build here, where the reason is one line.
+# Left to run on, it downloads a file called ".zip" and fails on a checksum,
+# which is where the previous failure actually pointed.
+ifeq ($(XRAY_ASSET),)
+$(error Неизвестная архитектура $(XKOP_TARGET_ARCH): нет соответствия файлу релиза XTLS)
+endif
 
 PKG_SOURCE:=$(XRAY_ASSET).zip
 PKG_SOURCE_URL:=https://github.com/XTLS/Xray-core/releases/download/v$(PKG_VERSION)

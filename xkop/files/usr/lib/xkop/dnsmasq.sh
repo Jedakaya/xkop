@@ -60,6 +60,72 @@ dnsmasq_configure() {
     log_info "dnsmasq переключён на $XKOP_DNS_INBOUND_ADDRESS"
 }
 
+# Protection from clients resolving around us. The engine cannot do this part:
+# it matches names, not record types, and these are record types. dnsmasq can,
+# through filter-rr, and the option is checked against the OpenWrt init script
+# rather than remembered.
+#
+#   HTTPS records carry the DoH endpoints browsers auto-discover. Dropping them
+#   is what keeps a browser asking us instead of resolving on its own.
+#   PTR from Apple devices otherwise costs tens of seconds of mDNS timeouts.
+#
+# Both are off unless asked for: filtering record types is a blunt instrument
+# and someone may be relying on them.
+dnsmasq_protection() {
+    local https ptr canary changed=0
+
+    https=$(config_uci_get settings block_https_records)
+    ptr=$(config_uci_get settings block_ptr_records)
+    canary=$(config_uci_get settings block_firefox_canary)
+
+    uci -q delete "dhcp.@dnsmasq[0].filter_rr" 2> /dev/null
+
+    if [ "$https" = "1" ]; then
+        uci -q add_list "dhcp.@dnsmasq[0].filter_rr=HTTPS"
+        changed=1
+    fi
+    if [ "$ptr" = "1" ]; then
+        uci -q add_list "dhcp.@dnsmasq[0].filter_rr=PTR"
+        changed=1
+    fi
+
+    # Firefox asks this name before turning its own DoH on. An empty answer
+    # from us is the documented way to say "not here".
+    if [ "$canary" = "1" ]; then
+        uci -q add_list "dhcp.@dnsmasq[0].server=/use-application-dns.net/"
+        changed=1
+    fi
+
+    if [ "$changed" -eq 1 ]; then
+        uci -q commit dhcp
+        /etc/init.d/dnsmasq restart > /dev/null 2>&1
+        log_info "фильтры записей DNS применены"
+    fi
+}
+
+# Removed separately from the resolver switch: the filters can be on while the
+# DNS mode is off, and then there is no server backup to hang the cleanup on.
+# Left behind, they would keep filtering long after xkop stopped.
+dnsmasq_protection_clear() {
+    local changed=0
+
+    if uci -q get "dhcp.@dnsmasq[0].filter_rr" > /dev/null 2>&1; then
+        uci -q delete "dhcp.@dnsmasq[0].filter_rr"
+        changed=1
+    fi
+
+    if uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null | grep -q 'use-application-dns.net'; then
+        uci -q del_list "dhcp.@dnsmasq[0].server=/use-application-dns.net/" 2> /dev/null
+        changed=1
+    fi
+
+    if [ "$changed" -eq 1 ]; then
+        uci -q commit dhcp
+        /etc/init.d/dnsmasq restart > /dev/null 2>&1
+        log_info "фильтры записей DNS сняты"
+    fi
+}
+
 dnsmasq_restore() {
     local value
 
@@ -70,6 +136,7 @@ dnsmasq_restore() {
         uci -q add_list "dhcp.@dnsmasq[0].server=$value"
     done
     uci -q delete "dhcp.@dnsmasq[0].xkop_server"
+    uci -q delete "dhcp.@dnsmasq[0].filter_rr" 2> /dev/null
 
     value=$(uci -q get "dhcp.@dnsmasq[0].xkop_noresolv" 2> /dev/null)
     if [ -n "$value" ]; then

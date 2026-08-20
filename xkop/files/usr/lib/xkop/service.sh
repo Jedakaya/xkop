@@ -125,11 +125,14 @@ service_prepare() {
         dnsmasq_restore
     fi
 
+    dnsmasq_protection
+
     return 0
 }
 
 service_teardown() {
     nft_clear
+    dnsmasq_protection_clear
     dnsmasq_restore
 }
 
