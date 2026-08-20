@@ -63,7 +63,16 @@ else
 fi
 STUB
 
-chmod +x "$work/bin/uci" "$work/bin/nslookup"
+# И dig тоже. На машине разработчика его обычно нет, а на раннере CI он есть,
+# и без этой заглушки Канарейка уходила спрашивать настоящую сеть — проверка
+# при этом молча проверяла не то.
+cat > "$work/bin/dig" << 'STUB'
+#!/bin/sh
+[ -n "$CANARY_FAKE_ANSWER" ] && echo "$CANARY_FAKE_ANSWER"
+exit 0
+STUB
+
+chmod +x "$work/bin/uci" "$work/bin/nslookup" "$work/bin/dig"
 PATH="$work/bin:$PATH"
 export PATH
 

@@ -22,7 +22,8 @@ RUN make defconfig \
 # The package is lifted out through an empty final stage: CI needs the file,
 # not an image. Loading the built image into the daemon instead would move the
 # whole SDK - gigabytes of it - for the sake of a few kilobytes.
-RUN mkdir -p /out && find /builder/bin -name 'xkop*.apk' -exec cp {} /out/ ';'
+RUN mkdir -p /builder/out \
+    && find /builder/bin -name 'xkop*.apk' -exec cp {} /builder/out/ ';'
 
 FROM scratch AS artifacts
-COPY --from=build /out/ /
+COPY --from=build /builder/out/ /

@@ -9,5 +9,4 @@ WORKDIR /builder
 RUN [ -x ./setup.sh ] && ./setup.sh || true
 
 RUN ./scripts/feeds update -a \
-    && ./scripts/feeds install curl jq gzip coreutils-base64 \
     && mkdir -p /builder/package/feeds/utilities/

@@ -19,6 +19,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/dnsmasq.sh"
 . "$XKOP_LIB_DIR/canary.sh"
 . "$XKOP_LIB_DIR/nodes.sh"
+. "$XKOP_LIB_DIR/diagnostics.sh"
 . "$XKOP_LIB_DIR/service.sh"
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
@@ -149,6 +150,12 @@ xkop - маршрутизатор трафика на Xray-core
   select <тег|auto>          закрепить узел вручную или вернуть автовыбор
   canary                     проверка подмены DNS провайдером
   get_status                 состояние службы, движка и правил
+  global_check               всё сразу и одной строкой, что не так
+  check_dns_available        отвечает ли резолвер
+  check_fakeip               выдаются ли поддельные адреса
+  check_nft_rules            есть ли правила и шёл ли через них трафик
+  check_logs [строк]         последние записи в журнале
+  get_system_info            роутер, место, память, версия
   check_engine               установлен ли движок, поднялся ли, отвечает ли
   configure                  собрать конфигурацию движка
   show_engine_config         показать установленную конфигурацию
@@ -214,6 +221,24 @@ main() {
         teardown)
             service_teardown
             jq -nc '{ok: true, result: "torn_down"}'
+            ;;
+        get_system_info | show_system_info)
+            diag_system_json
+            ;;
+        check_nft_rules)
+            diag_nft_json
+            ;;
+        check_logs)
+            diag_logs_json "${1:-50}"
+            ;;
+        check_dns_available)
+            diag_dns_json
+            ;;
+        check_fakeip)
+            diag_fakeip_json
+            ;;
+        global_check)
+            diag_global_json
             ;;
         get_status)
             service_status_json

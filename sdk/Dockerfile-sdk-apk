@@ -19,6 +19,10 @@ WORKDIR /builder
 # setup.sh unpacks the SDK in newer images; older ones do not ship it.
 RUN [ -x ./setup.sh ] && ./setup.sh || true
 
+# The feed index only. Installing the dependency packages themselves makes the
+# build compile them from source - curl with all its configure steps - and turns
+# a build of seconds into one of many minutes. We need them as a line in the
+# package metadata; building them is the router's business, from its own
+# repository.
 RUN ./scripts/feeds update -a \
-    && ./scripts/feeds install curl jq gzip coreutils-base64 \
     && mkdir -p /builder/package/feeds/utilities/
