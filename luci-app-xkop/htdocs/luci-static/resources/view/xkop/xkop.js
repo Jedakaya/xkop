@@ -29,9 +29,14 @@ const CSS = `
 .xkop-dot-warn { background: #e8590c; }
 .xkop-warn-text { color: #e03131; font-weight: bold; }
 
+/* Карточки в ряду тянутся до общей высоты: при align-items:start ряд с
+   высокой карточкой оставлял под низкими пустые дыры в пол-экрана. */
 .xkop-widgets { display: grid; gap: 1em;
-  grid-template-columns: repeat(auto-fit, minmax(21em, 1fr));
-  align-items: start; }
+  grid-template-columns: repeat(auto-fit, minmax(18em, 1fr)); }
+/* Обёртка части страницы, которую можно обновить отдельно. Из потока она
+   исчезает: иначе сетка виджетов увидела бы вместо них обёртки, а колонка
+   карточек потеряла бы промежутки. */
+.xkop-slot { display: contents; }
 .xkop-widget { border: 1px solid rgba(128,128,128,.3); border-radius: 6px;
   padding: .9em 1.1em; display: flex; flex-direction: column; }
 .xkop-widget-title { text-transform: uppercase; font-size: .75em;
@@ -64,8 +69,14 @@ const CSS = `
 .xkop-line { display: flex; gap: .8em; align-items: baseline;
   padding: .25em 0; justify-content: space-between; }
 .xkop-label { flex: 1 1 auto; min-width: 0; opacity: .75; }
+/* Значение и подсказка — один элемент строки: разрывать их переносом нельзя,
+   подсказка без своего значения читается как отдельное число. Не влезло —
+   подсказка урезается многоточием, а не уходит на новую строку. */
+.xkop-right { display: flex; align-items: baseline; gap: .4em;
+  flex: 0 1 auto; min-width: 0; }
 .xkop-value { flex: 0 0 auto; font-weight: bold; white-space: nowrap; }
-.xkop-hint { flex: 0 0 auto; opacity: .6; font-size: .9em; white-space: nowrap; }
+.xkop-hint { flex: 0 1 auto; min-width: 0; opacity: .6; font-size: .9em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .xkop-hint-wrap { opacity: .6; font-size: .9em; }
 .xkop-note { opacity: .7; font-size: .9em; margin-top: .4em; }
 .xkop-empty { opacity: .6; }
@@ -78,7 +89,17 @@ const CSS = `
 .xkop-explain { display: flex; gap: .5em; margin: .5em 0; }
 .xkop-explain input { flex: 1; }
 .xkop-explain-out { margin-top: .5em; }
-.xkop-controls { margin-top: .8em; display: flex; gap: .5em; flex-wrap: wrap; }
+.xkop-controls { margin-top: auto; padding-top: .8em; display: flex;
+  gap: .5em; flex-wrap: wrap; }
+
+/* Поля настроек. Штатная ширина LuCI рассчитана на узкие значения вроде
+   номера порта, и ссылка подписки в неё не помещается целиком — при том, что
+   справа половина строки пустует. */
+.cbi-map .cbi-value-field { max-width: none; }
+.cbi-map .cbi-value-field input[type="text"],
+.cbi-map .cbi-value-field input[type="password"],
+.cbi-map .cbi-value-field select { width: 100%; max-width: 34em; }
+.cbi-map .cbi-dynlist { max-width: 34em; }
 `;
 
 return view.extend({

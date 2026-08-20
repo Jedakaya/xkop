@@ -20,11 +20,19 @@
 //   - действие показывает, что стало, а не что мы просили сделать. «Служба
 //     запущена» и «движок отвечает» — разные утверждения.
 
+// Подпись слева, значение справа, подсказка вплотную к значению.
+//
+// Подсказка была отдельным элементом строки и при нехватке места уезжала
+// на свою строку: «архитектура aarch64_cortex-a53» и следующей строкой
+// одинокое «apk», «память свободно 338.3 МБ» и следующей «из 485.1 МБ».
+// Читается это как ещё одно значение, а не как уточнение к предыдущему.
 function line(label, value, hint) {
   return E("div", { class: "xkop-line" }, [
     E("span", { class: "xkop-label" }, label),
-    E("span", { class: "xkop-value" }, value),
-    hint ? E("span", { class: "xkop-hint" }, hint) : "",
+    E("span", { class: "xkop-right" }, [
+      E("span", { class: "xkop-value" }, value),
+      hint ? E("span", { class: "xkop-hint" }, hint) : "",
+    ]),
   ]);
 }
 
@@ -494,76 +502,114 @@ return L.Class.extend({
   render: function () {
     const root = E("div", { class: "xkop-dashboard" });
 
-    // Что считается изменением. Время работы и свободная память меняются
-    // каждую секунду, и перерисовывать из-за них всю страницу — это мигание
-    // и прыжок к началу списка на ровном месте. Сравнивается только то, ради
-    // чего на обзор и смотрят.
-    function signature(data) {
-      if (!data || !data.ok) return "нет ответа";
-      const s = data.service || {};
-      const d = (data.stats && data.stats.distribution) || {};
-      return JSON.stringify([
-        data.summary,
-        s.state, s.enabled, s.nodes,
-        (data.engine || {}).engine_version,
-        d.direct && d.direct.bytes, d.proxy && d.proxy.bytes, d.blocked && d.blocked.bytes,
-        (data.nodes && data.nodes.selected) || null,
-        (data.nodes && data.nodes.nodes || []).map(function (n) { return [n.tag, n.state, n.delay_ms]; }),
-        (data.subscriptions || []).map(function (x) { return [x.subscription, x.state, x.servers]; }),
-        (data.canary || {}).state,
-        (data.nft || {}).state,
-      ]);
+    // Страница разбита на части, и обновляется только та, что изменилась.
+    //
+    // Перерисовка целиком била по рукам: трафик меняется каждые пятнадцать
+    // секунд, значит менялась и страница — вместе с раскрытым списком узлов,
+    // позицией прокрутки и полем ввода, в котором человек в этот момент
+    // набирал имя. Разбор маршрута поэтому строится один раз и не трогается
+    // вовсе: там живой ввод.
+    const slots = {};
+
+    function slot(name, node) {
+      const box = E("div", { class: "xkop-slot" }, node ? [node] : []);
+      slots[name] = { box: box, sig: null };
+      root.appendChild(box);
+      return box;
     }
 
-    let painted = null;
+    function fill(name, sig, build) {
+      const s = slots[name];
+      if (!s || s.sig === sig) return;
+      s.sig = sig;
+      while (s.box.firstChild) s.box.removeChild(s.box.firstChild);
+      const node = build();
+      if (node) s.box.appendChild(node);
+    }
+
+    function key(value) {
+      return JSON.stringify(value === undefined ? null : value);
+    }
 
     function paint(data) {
-      const sig = signature(data);
-      if (sig === painted) return;
-      painted = sig;
-
-      // Раскрытый список узлов и позиция прокрутки — состояние пользователя,
-      // а не наше. Перерисовка не имеет права его отнимать.
-      const wasOpen = !!root.querySelector("details[open]");
-      const scrollY = window.scrollY;
-
-      while (root.firstChild) root.removeChild(root.firstChild);
-
       if (!data || !data.ok) {
-        root.appendChild(E("div", { class: "xkop-summary xkop-warn" },
-          _("Роутер не ответил: ") + ((data && data.error) || "?")));
+        fill("summary", "нет ответа", function () {
+          return E("div", { class: "xkop-summary xkop-warn" },
+            _("Роутер не ответил: ") + ((data && data.error) || "?"));
+        });
         return;
       }
 
-      root.appendChild(renderSummary(data));
-      root.appendChild(E("div", { class: "xkop-widgets" }, [
-        renderServiceWidget(data, refresh),
-        renderTrafficWidget(data.stats),
-        renderSavingsWidget(data.stats),
-        renderRules(data.nft),
-        renderRouterWidget(data),
-      ]));
-      root.appendChild(renderPool(data.nodes, refresh));
-      root.appendChild(renderSubscriptions(data.subscriptions, refresh));
-      root.appendChild(renderCanary(data.canary));
-      root.appendChild(renderExplain());
+      const svc = data.service || {};
+      const eng = data.engine || {};
+      const st = data.stats || {};
+      const d = st.distribution || {};
 
-      if (wasOpen) {
-        const details = root.querySelector("details");
-        if (details) details.open = true;
-      }
-      window.scrollTo(0, scrollY);
+      fill("summary", key(data.summary), function () {
+        return renderSummary(data);
+      });
+
+      fill("service", key([svc.state, svc.enabled, eng.engine_installed, eng.engine_version]),
+        function () { return renderServiceWidget(data, refresh); });
+
+      fill("traffic", key([st.ok, st.error,
+        d.direct && d.direct.bytes, d.proxy && d.proxy.bytes,
+        d.blocked && d.blocked.bytes, d.service && d.service.bytes]),
+        function () { return renderTrafficWidget(st); });
+
+      fill("savings", key([st.ok,
+        st.traffic && st.traffic.outbound_total && st.traffic.outbound_total.total,
+        d.proxy && d.proxy.bytes]),
+        function () { return renderSavingsWidget(st); });
+
+      fill("rules", key([(data.nft || {}).state, (data.nft || {}).packets_seen]),
+        function () { return renderRules(data.nft); });
+
+      // Время работы и свободная память меняются постоянно, а смотрят на них
+      // редко. Раз в минуту достаточно, и это не мешает ничему на экране.
+      fill("router", key([(data.system || {}).uptime,
+        Math.round(((data.system || {}).storage || {}).memory_free_kb / 1024 / 16)]),
+        function () { return renderRouterWidget(data); });
+
+      fill("pool", key([(data.nodes || {}).selected, (data.nodes || {}).selection,
+        ((data.nodes || {}).nodes || []).map(function (n) {
+          return [n.tag, n.state, n.delay_ms, n.probes];
+        })]),
+        function () { return renderPool(data.nodes, refresh); });
+
+      fill("subs", key((data.subscriptions || []).map(function (x) {
+        return [x.subscription, x.state, x.servers, x.reason];
+      })), function () { return renderSubscriptions(data.subscriptions, refresh); });
+
+      fill("canary", key([(data.canary || {}).state, (data.canary || {}).learned]),
+        function () { return renderCanary(data.canary); });
     }
 
     function refresh() {
+      // Опрос идёт, только пока обзор на экране. На другой вкладке он не
+      // нужен никому: перерисовывать нечего, а на роутере каждый опрос — это
+      // запущенный процесс, и платить им за невидимую страницу незачем.
+      if (root.offsetParent === null) return Promise.resolve();
       return api.dashboard().then(paint);
     }
 
     return api.dashboard().then(function (data) {
+      slot("summary");
+      const widgets = E("div", { class: "xkop-widgets" });
+      root.appendChild(widgets);
+      ["service", "traffic", "savings", "rules", "router"].forEach(function (name) {
+        const box = E("div", { class: "xkop-slot" });
+        slots[name] = { box: box, sig: null };
+        widgets.appendChild(box);
+      });
+      slot("pool");
+      slot("subs");
+      slot("canary");
+
+      // Строится один раз и живёт своей жизнью: внутри поле ввода.
+      root.appendChild(renderExplain());
+
       paint(data);
-      // Обзор должен оставаться правдой, пока на него смотрят. Обновление
-      // на месте: перезагрузка страницы после каждой кнопки теряет и позицию
-      // прокрутки, и раскрытый список узлов.
       poll.add(refresh, 15);
       return root;
     });
