@@ -29,6 +29,7 @@ ssh "$TARGET" 'mkdir -p /usr/lib/xkop'
 
 scp "$ROOT"/xkop/files/usr/lib/xkop/* "$TARGET:/usr/lib/xkop/"
 scp "$ROOT"/xkop/files/usr/bin/xkop "$TARGET:/usr/bin/xkop"
+scp "$ROOT"/xkop/files/etc/init.d/xkop "$TARGET:/etc/init.d/xkop"
 
 if [ "$WITH_CONFIG" = "--config" ]; then
     echo "-- /etc/config/xkop тоже"
@@ -37,7 +38,7 @@ fi
 
 # The package build substitutes the version; a hand copy has none, and saying
 # "dev" is better than shipping the placeholder into the interface.
-ssh "$TARGET" 'chmod +x /usr/bin/xkop && sed -i "s/__COMPILED_VERSION_VARIABLE__/dev/" /usr/lib/xkop/constants.sh'
+ssh "$TARGET" 'chmod +x /usr/bin/xkop /etc/init.d/xkop && sed -i "s/__COMPILED_VERSION_VARIABLE__/dev/" /usr/lib/xkop/constants.sh'
 
 echo "-- проверка:"
 ssh "$TARGET" 'xkop version'
