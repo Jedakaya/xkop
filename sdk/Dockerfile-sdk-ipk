@@ -1,0 +1,11 @@
+# Prepared OpenWrt SDK for ipk builds - the branch the client fleet runs on.
+# See sdk/Dockerfile-sdk-apk for why the slow part lives in a separate image.
+FROM openwrt/sdk:x86-64-24.10.8
+
+WORKDIR /builder
+
+RUN [ -x ./setup.sh ] && ./setup.sh || true
+
+RUN ./scripts/feeds update -a \
+    && ./scripts/feeds install curl jq gzip coreutils-base64 \
+    && mkdir -p /builder/package/feeds/utilities/

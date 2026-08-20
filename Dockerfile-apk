@@ -1,23 +1,18 @@
-# Build of the apk package on the OpenWrt 25.12 SDK.
+# Build of the xkop apk package.
 #
-# The SDK release is pinned rather than tracking SNAPSHOT: SNAPSHOT is rebuilt
-# daily, and a build that cannot be repeated a month later is not a build.
+# Starts from a prepared SDK image (sdk/Dockerfile-sdk-apk), so a change in a
+# shell script costs one make call and not a feeds update. Rebuild that image
+# only when the SDK release changes.
 #
 # The package is PKGARCH:=all, so the x86-64 SDK produces something installable
 # on any router. Only the package format depends on the SDK: 25.12 is apk.
-FROM openwrt/sdk:x86-64-25.12.0
+ARG SDK_IMAGE=ghcr.io/jedakaya/xkop-sdk-apk:25.12.0
+FROM ${SDK_IMAGE}
 
 ARG XKOP_VERSION
 ENV XKOP_VERSION=${XKOP_VERSION}
 
 WORKDIR /builder
-
-# setup.sh unpacks the SDK in the newer images; older ones do not ship it.
-RUN [ -x ./setup.sh ] && ./setup.sh || true
-
-RUN ./scripts/feeds update -a \
-    && ./scripts/feeds install curl jq gzip coreutils-base64 \
-    && mkdir -p /builder/package/feeds/utilities/
 
 COPY ./xkop /builder/package/feeds/utilities/xkop
 

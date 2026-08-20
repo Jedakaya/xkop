@@ -1,0 +1,19 @@
+# Prepared OpenWrt SDK for apk builds.
+#
+# Everything slow lives here and nowhere else: unpacking the SDK and updating
+# the feeds takes minutes, and it has nothing to do with our code. The image is
+# built when the SDK release changes - which is a few times a year - and every
+# package build after that starts from a ready tree.
+#
+# The SDK release is pinned rather than tracking SNAPSHOT: SNAPSHOT is rebuilt
+# daily, and a build that cannot be repeated a month later is not a build.
+FROM openwrt/sdk:x86-64-25.12.0
+
+WORKDIR /builder
+
+# setup.sh unpacks the SDK in newer images; older ones do not ship it.
+RUN [ -x ./setup.sh ] && ./setup.sh || true
+
+RUN ./scripts/feeds update -a \
+    && ./scripts/feeds install curl jq gzip coreutils-base64 \
+    && mkdir -p /builder/package/feeds/utilities/
