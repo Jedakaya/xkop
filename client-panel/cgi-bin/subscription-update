@@ -1,0 +1,13 @@
+#!/bin/sh
+# Обновить подписку сейчас. Человек, нажавший кнопку, ждёт запроса к панели,
+# а не рассказа про расписание.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+RESULT=$(xkop subscription_update)
+xkop configure > /dev/null 2>&1
+
+header_json
+jq -nc --argjson subs "${RESULT:-[]}" '{ok: true, subscriptions: $subs}'

@@ -1,0 +1,56 @@
+#!/bin/sh
+# Вход по паролю роутера.
+#
+# Ограничение попыток здесь не украшение: без него точка входа превращается
+# в оракул, который отвечает так быстро, как роутер успевает считать хэш.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+PASS=$(urldecode "$(post_field "$DATA" password)")
+
+NOW=$(date +%s)
+FAILS=0
+LAST=0
+if [ -f "$FAIL_FILE" ]; then
+    FAILS=$(head -n 1 "$FAIL_FILE" 2>/dev/null); [ -n "$FAILS" ] || FAILS=0
+    LAST=$(sed -n '2p' "$FAIL_FILE" 2>/dev/null); [ -n "$LAST" ] || LAST=0
+    [ $((NOW - LAST)) -gt 900 ] && FAILS=0
+fi
+
+if [ "$FAILS" -ge 5 ]; then
+    header_json
+    echo '{"ok":false,"error":"too_many_attempts","retry_after_minutes":15}'
+    exit 0
+fi
+
+grant() {
+    local token
+    token=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "t-$$-$NOW")
+    printf '%s\n%s\n' "$token" "$((NOW + TOKEN_TTL))" > "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE" 2>/dev/null
+    rm -f "$FAIL_FILE"
+    header_json
+    printf '{"ok":true,"token":"%s"}\n' "$token"
+    exit 0
+}
+
+HASH=$(grep '^root:' /etc/shadow 2>/dev/null | cut -d: -f2)
+
+# Пароль не задан — пускаем. Требовать несуществующий пароль значит запереть
+# человека снаружи собственного роутера.
+if [ -z "$HASH" ] || [ "$HASH" = "*" ] || [ "$HASH" = "!" ]; then
+    grant
+fi
+
+SALT=$(printf '%s' "$HASH" | cut -d'$' -f1-3)
+CHECK=$(printf '%s' "$PASS" | openssl passwd -stdin -salt "$SALT" -6 2>/dev/null)
+[ "$CHECK" = "$HASH" ] || CHECK=$(printf '%s' "$PASS" | openssl passwd -stdin -salt "$SALT" -5 2>/dev/null)
+[ "$CHECK" = "$HASH" ] || CHECK=$(printf '%s' "$PASS" | openssl passwd -stdin -salt "$SALT" -1 2>/dev/null)
+
+if [ -n "$CHECK" ] && [ "$CHECK" = "$HASH" ]; then
+    grant
+fi
+
+printf '%s\n%s\n' "$((FAILS + 1))" "$NOW" > "$FAIL_FILE"
+header_json
+echo '{"ok":false,"error":"wrong_password"}'

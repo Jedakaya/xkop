@@ -41,9 +41,22 @@ jobs:
             node --check "$f"
           done
 
+      # Панель клиента — один файл без сборки: она должна открываться и через
+      # десять лет, а не требовать пересборки. Синтаксис её скрипта проверяется
+      # тем же способом.
+      - name: Panel syntax
+        run: |
+          python3 - <<'PY'
+          import io, re
+          html = io.open('client-panel/index.html', encoding='utf-8').read()
+          m = re.search(r'<script>(.*)</script>', html, re.S)
+          io.open('/tmp/panel.js', 'w', encoding='utf-8').write(m.group(1))
+          PY
+          node --check /tmp/panel.js
+
       - name: Shell syntax
         run: |
-          for f in xkop/files/usr/bin/xkop xkop/files/usr/lib/xkop/*.sh tests/*.sh; do
+          for f in xkop/files/usr/bin/xkop xkop/files/usr/lib/xkop/*.sh tests/*.sh                    client-panel/cgi-bin/*; do
             sh -n "$f"
           done
 

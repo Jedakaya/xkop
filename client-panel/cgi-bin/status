@@ -1,0 +1,42 @@
+#!/bin/sh
+# Состояние для конечного пользователя: одна строка о том, что происходит,
+# и распределение трафика числом. Ни DNS, ни интерфейсов, ни списков.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+CHECK=$(xkop global_check)
+STATS=$(xkop stats)
+SUBS=$(xkop subscriptions)
+NODES=$(xkop nodes)
+
+header_json
+jq -nc \
+    --argjson check "${CHECK:-null}" \
+    --argjson stats "${STATS:-null}" \
+    --argjson subs "${SUBS:-[]}" \
+    --argjson nodes "${NODES:-null}" \
+    '{
+        ok: true,
+        summary: ($check.summary // "состояние неизвестно"),
+        running: ($check.service.engine.running // false),
+        distribution: ($stats.distribution // null),
+        total: ($stats.traffic.outbound_total.total // 0),
+        subscriptions: [ $subs[] | {
+            id: .subscription, state: .state, reason: .reason, servers: .servers,
+            announce: (.panel.announce // null),
+            traffic: (if .userinfo == null then null else {
+                used: ((.userinfo.upload // 0) + (.userinfo.download // 0)),
+                total: (.userinfo.total // 0),
+                expire: (.userinfo.expire // 0)
+            } end)
+        } ],
+        nodes: {
+            selection: ($nodes.selection // "auto"),
+            selected: ($nodes.selected // null),
+            alive: ($nodes.alive // 0),
+            total: ($nodes.total // 0),
+            list: [ ($nodes.nodes // [])[] | {tag, state, delay_ms} ]
+        }
+    }'

@@ -1,0 +1,74 @@
+#!/bin/sh
+# shellcheck shell=ash
+# Общее для всех точек панели клиента.
+#
+# Панель видит конечный пользователь, и в ней нет ничего, кроме подписки
+# и выбора маршрута: ни DNS, ни интерфейсов, ни списков — см. docs/dashboard.md.
+# Всё остальное живёт в LuCI.
+#
+# Каждая точка отвечает JSON и никогда не отвечает пустотой: пустой ответ
+# неотличим от честного «нет».
+
+XKOP_BIN=/usr/bin/xkop
+TOKEN_FILE=/tmp/xkop-panel-token
+FAIL_FILE=/tmp/xkop-panel-failures
+TOKEN_TTL=3600
+
+header_json() {
+    echo "Content-Type: application/json"
+    echo ""
+}
+
+fail() {
+    header_json
+    printf '{"ok":false,"error":"%s"}\n' "$1"
+    exit 0
+}
+
+# Декодируется всё, а не горстка выбранных символов. Половинчатое
+# декодирование уже приводило к тому, что пароль с вопросительным знаком
+# можно было задать и больше никогда не ввести.
+urldecode() {
+    printf '%b' "$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')"
+}
+
+post_field() {
+    local data="$1" name="$2"
+    printf '%s' "$data" \
+        | tr '&' '\n' \
+        | sed -n "s/^$name=//p" \
+        | head -n 1
+}
+
+read_post() {
+    local data=""
+    [ -n "${CONTENT_LENGTH:-}" ] && [ "$CONTENT_LENGTH" -gt 0 ] 2> /dev/null \
+        && data=$(head -c "$CONTENT_LENGTH")
+    printf '%s' "$data"
+}
+
+token_valid() {
+    local token="$1" stored expires now
+
+    [ -n "$token" ] || return 1
+    [ -f "$TOKEN_FILE" ] || return 1
+
+    stored=$(head -n 1 "$TOKEN_FILE" 2> /dev/null)
+    expires=$(sed -n '2p' "$TOKEN_FILE" 2> /dev/null)
+    now=$(date +%s)
+
+    [ "$token" = "$stored" ] || return 1
+    [ -n "$expires" ] && [ "$now" -lt "$expires" ]
+}
+
+# Каждая точка, кроме входа, начинается с этого.
+require_token() {
+    local data="$1" token
+    token=$(post_field "$data" token)
+    [ -n "$token" ] || token="${HTTP_X_XKOP_TOKEN:-}"
+    token_valid "$token" || fail "unauthorized"
+}
+
+xkop() {
+    "$XKOP_BIN" "$@" 2> /dev/null
+}

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Почему этот сайт ведёт себя так, а не иначе. Перевод поддержки
+# в самообслуживание: вместо «у меня не открывается, посмотри» человек
+# сам видит, что домен не попал ни в один список и ушёл напрямую.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+DOMAIN=$(urldecode "$(post_field "$DATA" domain)")
+[ -n "$DOMAIN" ] || fail "no_domain"
+
+case "$DOMAIN" in
+    *[!a-zA-Z0-9.-]*) fail "bad_domain" ;;
+esac
+
+header_json
+xkop explain "$DOMAIN"

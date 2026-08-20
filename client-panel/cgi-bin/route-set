@@ -1,0 +1,24 @@
+#!/bin/sh
+# Выбор маршрута: какой профиль в какой канал. Это и есть та самая
+# «настройка», которая у конечного пользователя должна умещаться в один
+# переключатель.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+BINDING=$(post_field "$DATA" binding)
+CHANNEL=$(post_field "$DATA" channel)
+
+[ -n "$BINDING" ] || fail "no_binding"
+[ -n "$CHANNEL" ] || fail "no_channel"
+uci -q get "xkop.$BINDING" > /dev/null 2>&1 || fail "unknown_binding"
+uci -q get "xkop.$CHANNEL" > /dev/null 2>&1 || fail "unknown_channel"
+
+uci -q set "xkop.$BINDING.channel=$CHANNEL"
+uci -q commit xkop
+xkop configure > /dev/null 2>&1
+/etc/init.d/xkop restart > /dev/null 2>&1 &
+
+header_json
+jq -nc --arg b "$BINDING" --arg c "$CHANNEL" '{ok: true, binding: $b, channel: $c}'

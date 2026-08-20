@@ -1,0 +1,285 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xkop</title>
+
+<!--
+  Панель конечного пользователя.
+
+  В ней нет ничего, кроме подписки и выбора маршрута — так решено
+  в docs/dashboard.md. Всё остальное живёт в LuCI, и попадать сюда не должно:
+  человек, который открыл эту страницу, хочет знать, работает ли интернет
+  и куда идёт трафик, а не настраивать резолвер.
+
+  Собирается без сборки: один файл, обычный JavaScript. Панель на роутере
+  должна открываться и через десять лет, а не требовать пересборки.
+-->
+
+<style>
+  :root { color-scheme: light dark; --pad: 16px; }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: var(--pad); max-width: 720px; margin-inline: auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 var(--pad); }
+  .card { border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+          border-radius: 10px; padding: var(--pad); margin-bottom: var(--pad); }
+  .card h2 { font-size: 1rem; margin: 0 0 10px; }
+  .summary { padding: 12px var(--pad); border-radius: 10px; font-weight: 600;
+             margin-bottom: var(--pad); }
+  .ok { background: #e6f4ea; color: #1e4620; }
+  .warn { background: #fdf0e2; color: #6b3b00; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+  .muted { opacity: .65; }
+  .bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+         margin: 10px 0; background: color-mix(in srgb, currentColor 12%, transparent); }
+  .bar i { display: block; }
+  .direct { background: #4c8bf5; } .proxy { background: #34a853; } .blocked { background: #ea4335; }
+  input, select, button { font: inherit; padding: 8px 10px; border-radius: 8px;
+          border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+          background: transparent; color: inherit; }
+  button { cursor: pointer; }
+  button.primary { background: #34a853; color: #fff; border-color: transparent; }
+  .field { display: flex; gap: 8px; margin-top: 8px; }
+  .field input { flex: 1; min-width: 0; }
+  .hidden { display: none; }
+  .err { color: #c5221f; }
+</style>
+
+<h1>xkop</h1>
+
+<div id="login" class="card">
+  <h2>Вход</h2>
+  <div class="muted">Пароль роутера.</div>
+  <div class="field">
+    <input id="password" type="password" autocomplete="current-password">
+    <button class="primary" onclick="login()">Войти</button>
+  </div>
+  <div id="login-error" class="err"></div>
+</div>
+
+<div id="app" class="hidden">
+  <div id="summary" class="summary warn">загружаю…</div>
+
+  <div class="card">
+    <h2>Трафик</h2>
+    <div id="bar" class="bar"></div>
+    <div id="traffic"></div>
+  </div>
+
+  <div class="card">
+    <h2>Подписка</h2>
+    <div id="subs"></div>
+    <div class="field">
+      <input id="url" placeholder="https://…" autocomplete="off">
+      <button onclick="setSubscription()">Сохранить</button>
+    </div>
+    <div class="field">
+      <button onclick="updateSubscription()">Обновить сейчас</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Маршрут</h2>
+    <div id="routes"></div>
+  </div>
+
+  <div class="card">
+    <h2>Серверы</h2>
+    <div id="nodes"></div>
+  </div>
+
+  <div class="card">
+    <h2>Почему сайт так работает</h2>
+    <div class="field">
+      <input id="domain" placeholder="example.com" autocomplete="off">
+      <button onclick="explain()">Разобрать</button>
+    </div>
+    <div id="explain"></div>
+  </div>
+</div>
+
+<script>
+  var token = sessionStorage.getItem("xkop-token") || "";
+
+  function post(path, params) {
+    var body = Object.keys(params || {}).map(function (k) {
+      return k + "=" + encodeURIComponent(params[k]);
+    });
+    if (token) body.push("token=" + encodeURIComponent(token));
+    return fetch("cgi-bin/" + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.join("&"),
+    }).then(function (r) { return r.json(); });
+  }
+
+  function bytes(n) {
+    var u = ["Б", "КБ", "МБ", "ГБ", "ТБ"], i = 0;
+    n = Number(n) || 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : n) + " " + u[i];
+  }
+
+  function el(id) { return document.getElementById(id); }
+
+  function login() {
+    el("login-error").textContent = "";
+    post("auth", { password: el("password").value }).then(function (r) {
+      if (!r.ok) {
+        el("login-error").textContent = r.error === "too_many_attempts"
+          ? "Слишком много попыток, подождите 15 минут"
+          : "Неверный пароль";
+        return;
+      }
+      token = r.token;
+      sessionStorage.setItem("xkop-token", token);
+      el("login").classList.add("hidden");
+      el("app").classList.remove("hidden");
+      refresh();
+    });
+  }
+
+  function refresh() {
+    post("status", {}).then(function (s) {
+      if (!s.ok) { logout(); return; }
+
+      var box = el("summary");
+      box.textContent = s.summary;
+      box.className = "summary " + (s.summary === "работает" ? "ok" : "warn");
+
+      renderTraffic(s);
+      renderSubs(s.subscriptions || []);
+      renderNodes(s.nodes || {});
+    });
+    post("routes", {}).then(renderRoutes);
+  }
+
+  function renderTraffic(s) {
+    var d = s.distribution;
+    if (!d) { el("traffic").textContent = "метрики недоступны"; return; }
+
+    var total = s.total || 0;
+    el("bar").innerHTML = ["direct", "proxy", "blocked"].map(function (k) {
+      var share = (d[k] && d[k].share) || 0;
+      return '<i class="' + k + '" style="width:' + (share * 100) + '%"></i>';
+    }).join("");
+
+    var names = { direct: "напрямую", proxy: "через туннель", blocked: "заблокировано" };
+    el("traffic").innerHTML = Object.keys(names).map(function (k) {
+      return '<div class="row"><span>' + names[k] + "</span><span>" +
+        bytes(d[k].bytes) + ' <span class="muted">' +
+        Math.round(d[k].share * 1000) / 10 + "%</span></span></div>";
+    }).join("") +
+      (total > 0
+        ? '<div class="muted" style="margin-top:8px">Всего ' + bytes(total) +
+          ". Без распределения весь объём ушёл бы в туннель — сэкономлено " +
+          bytes(total - (d.proxy ? d.proxy.bytes : 0)) + "."
+        : "");
+  }
+
+  function renderSubs(subs) {
+    var names = {
+      ready: "готова", stale: "устаревает", empty: "пустая",
+      rejected: "отвергнута", blocked: "отказ панели", absent: "не задана",
+    };
+    el("subs").innerHTML = subs.length === 0
+      ? '<div class="muted">Подписка не задана</div>'
+      : subs.map(function (s) {
+          var out = '<div class="row"><span>' + s.id + "</span><span>" +
+            (names[s.state] || s.state) + " · " + s.servers + " серверов</span></div>";
+          // Слова панели, а не наши: «достигнут лимит устройств» — не то же
+          // самое, что «серверов нет», и чинится иначе.
+          if (s.announce) out += '<div class="muted">' + s.announce + "</div>";
+          if (s.traffic && s.traffic.total > 0) {
+            out += '<div class="row muted"><span>трафик</span><span>' +
+              bytes(s.traffic.used) + " из " + bytes(s.traffic.total) + "</span></div>";
+          }
+          if (s.traffic && s.traffic.expire > 0) {
+            out += '<div class="row muted"><span>действует до</span><span>' +
+              new Date(s.traffic.expire * 1000).toLocaleDateString() + "</span></div>";
+          }
+          return out;
+        }).join("");
+  }
+
+  function renderRoutes(r) {
+    if (!r || !r.ok) return;
+    var channels = r.channels || [];
+    el("routes").innerHTML = (r.bindings || []).map(function (b) {
+      var options = channels.map(function (c) {
+        var label = c.type === "block" ? "блокировать"
+          : c.type === "direct" ? "напрямую" : "через туннель";
+        return '<option value="' + c.id + '"' + (c.id === b.channel ? " selected" : "") +
+          ">" + label + "</option>";
+      }).join("");
+      return '<div class="row"><span>' + b.title + "</span>" +
+        '<select onchange="setRoute(\'' + b.id + "', this.value)\">" + options + "</select></div>";
+    }).join("") || '<div class="muted">Привязок нет</div>';
+  }
+
+  function renderNodes(n) {
+    var head = '<div class="row"><span>живых</span><span>' + (n.alive || 0) +
+      " из " + (n.total || 0) + "</span></div>" +
+      '<div class="row"><span>выбран</span><span>' + (n.selected || "автоматически") +
+      "</span></div>";
+
+    var list = (n.list || []).map(function (x) {
+      var state = { alive: "жив", dead: "мёртв", pending: "проверяется", unobserved: "без наблюдения" };
+      return '<div class="row"><span>' + x.tag + "</span><span>" +
+        (state[x.state] || x.state) +
+        (x.delay_ms === null ? "" : " · " + x.delay_ms + " мс") +
+        ' <button onclick="selectNode(\'' + x.tag.replace(/'/g, "\\'") + "')\">выбрать</button></span></div>";
+    }).join("");
+
+    el("nodes").innerHTML = head + list +
+      '<div class="field"><button onclick="selectNode(\'auto\')">Вернуть автовыбор</button></div>';
+  }
+
+  function setSubscription() {
+    var url = el("url").value.trim();
+    if (!url) return;
+    post("subscription-set", { url: url }).then(function () { setTimeout(refresh, 2000); });
+  }
+
+  function updateSubscription() {
+    post("subscription-update", {}).then(refresh);
+  }
+
+  function setRoute(binding, channel) {
+    post("route-set", { binding: binding, channel: channel }).then(function () {
+      setTimeout(refresh, 2000);
+    });
+  }
+
+  function selectNode(tag) {
+    post("node-select", { tag: tag }).then(refresh);
+  }
+
+  function explain() {
+    var domain = el("domain").value.trim();
+    if (!domain) return;
+    el("explain").textContent = "спрашиваю…";
+    post("explain", { domain: domain }).then(function (r) {
+      if (!r.ok) {
+        el("explain").innerHTML = '<div class="err">не получилось: ' + (r.error || "") + "</div>";
+        return;
+      }
+      el("explain").innerHTML =
+        '<div class="row"><span>итог</span><span>' + (r.role || "неизвестно") + "</span></div>" +
+        (r.why ? '<div class="row"><span>почему</span><span>' + r.why + "</span></div>" : "") +
+        (r.node ? '<div class="row"><span>узел</span><span>' + r.node.tag + "</span></div>" : "");
+    });
+  }
+
+  function logout() {
+    token = "";
+    sessionStorage.removeItem("xkop-token");
+    el("app").classList.add("hidden");
+    el("login").classList.remove("hidden");
+  }
+
+  if (token) {
+    el("login").classList.add("hidden");
+    el("app").classList.remove("hidden");
+    refresh();
+  }
+  setInterval(function () { if (token) refresh(); }, 15000);
+</script>

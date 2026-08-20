@@ -1,0 +1,12 @@
+#!/bin/sh
+# Закрепить узел или вернуть автовыбор.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+TAG=$(urldecode "$(post_field "$DATA" tag)")
+[ -n "$TAG" ] || TAG=auto
+
+header_json
+xkop select "$TAG"

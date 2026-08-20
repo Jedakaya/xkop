@@ -1,0 +1,27 @@
+#!/bin/sh
+# Что куда направлено сейчас: привязки с названиями профилей и каналов.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+bindings='[]'
+for id in $(uci -q show xkop 2>/dev/null | sed -n 's/^xkop\.\([^.=]*\)=binding$/\1/p'); do
+    profile=$(uci -q get "xkop.$id.profile")
+    channel=$(uci -q get "xkop.$id.channel")
+    title=$(uci -q get "xkop.$profile.title" 2>/dev/null)
+    [ -n "$title" ] || title="$profile"
+    bindings=$(printf '%s' "$bindings" | jq -c \
+        --arg id "$id" --arg profile "$profile" --arg channel "$channel" --arg title "$title" \
+        '. + [{id: $id, profile: $profile, title: $title, channel: $channel}]')
+done
+
+channels='[]'
+for id in $(uci -q show xkop 2>/dev/null | sed -n 's/^xkop\.\([^.=]*\)=channel$/\1/p'); do
+    type=$(uci -q get "xkop.$id.type")
+    channels=$(printf '%s' "$channels" | jq -c --arg id "$id" --arg type "$type" \
+        '. + [{id: $id, type: $type}]')
+done
+
+header_json
+jq -nc --argjson b "$bindings" --argjson c "$channels" '{ok: true, bindings: $b, channels: $c}'

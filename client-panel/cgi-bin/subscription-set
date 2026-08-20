@@ -1,0 +1,30 @@
+#!/bin/sh
+# Ссылка подписки. Единственное, что конечный пользователь вводит руками.
+. "$(dirname "$0")/_common"
+
+DATA=$(read_post)
+require_token "$DATA"
+
+URL=$(urldecode "$(post_field "$DATA" url)")
+ID=$(post_field "$DATA" id)
+[ -n "$ID" ] || ID=main
+
+case "$URL" in
+    https://*|http://*) ;;
+    *) fail "bad_url" ;;
+esac
+
+uci -q get "xkop.$ID" > /dev/null 2>&1 || {
+    uci -q set "xkop.$ID=subscription"
+    uci -q set "xkop.$ID.enabled=1"
+}
+uci -q set "xkop.$ID.url=$URL"
+uci -q commit xkop
+
+RESULT=$(xkop subscription_update "$ID")
+xkop configure > /dev/null 2>&1
+/etc/init.d/xkop restart > /dev/null 2>&1 &
+
+header_json
+jq -nc --argjson subs "${RESULT:-[]}" --arg id "$ID" \
+    '{ok: true, subscription: $id, state: ([ $subs[] | select(.subscription == $id) ] | first)}'
