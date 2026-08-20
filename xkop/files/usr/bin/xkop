@@ -14,6 +14,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/stats.sh"
 . "$XKOP_LIB_DIR/subscription.sh"
 . "$XKOP_LIB_DIR/config.sh"
+. "$XKOP_LIB_DIR/lists.sh"
 . "$XKOP_LIB_DIR/nft.sh"
 . "$XKOP_LIB_DIR/service.sh"
 
@@ -170,6 +171,15 @@ main() {
             ;;
         get_subscription_userinfo)
             cmd_subscription_userinfo
+            ;;
+        lists_update)
+            lists_update
+            jq -nc \
+                --argjson present "$(lists_present && echo true || echo false)" \
+                --arg path "$(lists_geosite_path)" \
+                '{ok: $present,
+                  result: (if $present then "present" else "missing" end),
+                  path: $path}'
             ;;
         configure)
             cmd_configure

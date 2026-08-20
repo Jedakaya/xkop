@@ -22,6 +22,9 @@ start_service() {
     # one place where that decision belongs.
     procd_open_instance engine
     procd_set_param command /usr/bin/xray run -c "$CONFIG"
+    # Где лежат списки, движку сообщается явно: искать он умеет в нескольких
+    # местах, и молчаливый промах превращается в отказ загрузки конфигурации.
+    procd_set_param env XRAY_LOCATION_ASSET=/usr/share/xray
     procd_set_param respawn 3600 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1

@@ -44,6 +44,7 @@ cron_install() {
     {
         echo "$minute * * * * /usr/bin/xkop subscription_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
         echo "$minute 5 * * * /usr/bin/xkop configure > /dev/null 2>&1 $XKOP_CRON_MARKER"
+        echo "$minute 4 * * * /usr/bin/xkop lists_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
     } >> "$tmp"
 
     if ! cmp -s "$tmp" "$crontab" 2> /dev/null; then
@@ -92,6 +93,10 @@ service_prepare() {
     mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" "$XKOP_CACHE_DIR"
 
     cron_install
+
+    # Списки нужны движку в момент загрузки конфигурации: правило geosite он
+    # разворачивает сразу, и без файла отвергает конфигурацию целиком.
+    lists_present || lists_update
 
     subscription_update_all
 
