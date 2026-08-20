@@ -47,7 +47,7 @@ userlist_fetch() {
     mkdir -p "$XKOP_USERLIST_DIR" "$XKOP_RUN_DIR"
     tmp="$XKOP_RUN_DIR/userlist.$$"
 
-    if ! curl -fsSL --max-time 60 -o "$tmp" "$url" 2> /dev/null; then
+    if ! lists_download "$url" "$tmp" 60; then
         log_warn "список не скачался: $url"
         rm -f "$tmp"
         return 1

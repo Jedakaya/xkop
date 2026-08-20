@@ -52,6 +52,7 @@ config_settings_json() {
         --arg fakeip_range "$XKOP_FAKEIP_RANGE" \
         --argjson dns_extra "$(config_uci_list_json settings dns_extra_server)" \
         --argjson canary_learned "$(config_uci_list_json settings canary_learned_ip)" \
+        --argjson fully_routed "$(config_uci_list_json settings fully_routed_ip)" \
         '{
             dns_mode: (if $dns_mode == "" then "off" else $dns_mode end),
             block_client_doh: (if $block_client_doh == "" then "0" else $block_client_doh end),
@@ -65,7 +66,8 @@ config_settings_json() {
             dns_port: (($dns_port | tonumber?) // 53),
             fakeip_range: $fakeip_range,
             dns_extra: $dns_extra,
-            canary_learned: $canary_learned
+            canary_learned: $canary_learned,
+            fully_routed_ip: $fully_routed
         } + {
             log_level: (if $log_level == "" then "warning" else $log_level end),
             metrics_port: (($metrics_port | tonumber?) // 11111),

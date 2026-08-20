@@ -95,6 +95,33 @@ engine_process_running() {
     return 1
 }
 
+# Версия движка с запоминанием.
+#
+# Спрашивается она запуском самого движка, а обзор спрашивает её на каждой
+# отрисовке - лишний запуск бинарника там, где ответ меняется раз в несколько
+# месяцев. Запомненное привязано ко времени правки файла: обновился движок -
+# ответ пересчитается сам.
+engine_version_cached() {
+    local bin cache stamp saved
+    bin=$(command -v "${XKOP_ENGINE_BIN:-xray}" 2> /dev/null) || return 0
+    [ -n "$bin" ] || return 0
+
+    cache="$XKOP_RUN_DIR/engine-version"
+    stamp=$(date -r "$bin" +%s 2> /dev/null)
+    [ -n "$stamp" ] || stamp=0
+
+    saved=$(cat "$cache" 2> /dev/null)
+    case "$saved" in
+        "$stamp "*) printf '%s' "${saved#* }"; return 0 ;;
+    esac
+
+    saved=$("$bin" version 2> /dev/null | head -n 1 | awk '{print $2}')
+    [ -n "$saved" ] || return 0
+    mkdir -p "$XKOP_RUN_DIR"
+    printf '%s %s' "$stamp" "$saved" > "$cache"
+    printf '%s' "$saved"
+}
+
 # Proof, not assumption: the metrics endpoint answers only when the engine is
 # up and running our configuration. A pid says nothing about which one.
 engine_answers() {
@@ -225,6 +252,31 @@ service_check_requirements() {
     return 0
 }
 
+# Обновление списков в фоне, после того как роутер уже поднялся.
+#
+# Перезапуск делается только когда состав подсетей изменился: обновление ради
+# обновления рвало бы соединения на ровном месте раз в час.
+lists_refresh_background() {
+    local pidfile="$XKOP_RUN_DIR/lists-refresh.pid" pid
+
+    pid=$(cat "$pidfile" 2> /dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null; then
+        return 0
+    fi
+
+    (
+        trap 'rm -f "$pidfile"' EXIT INT TERM
+        sleep 20
+        if lists_subnets_update_changed; then
+            log_info "состав подсетей изменился, пересобираю конфигурацию"
+            config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
+        fi
+    ) &
+
+    echo $! > "$pidfile"
+    return 0
+}
+
 service_prepare() {
     mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" "$XKOP_CACHE_DIR"
 
@@ -239,9 +291,18 @@ service_prepare() {
     # Списки нужны движку в момент загрузки конфигурации: правило geosite он
     # разворачивает сразу, и без файла отвергает конфигурацию целиком.
     lists_present || lists_update
-    # Адреса категорий: без них Telegram и прочие сервисы, живущие на своих
-    # подсетях, не маршрутизируются вовсе — правилу по имени там нечего ловить.
-    lists_subnets_update
+
+    # Списки берутся из кэша, сеть здесь не спрашивается вовсе.
+    #
+    # Загрузка подсетей стояла тут же и делала старт бесконечным: у категории
+    # своя минута ожидания, и на роутере, которому как раз и нужен туннель,
+    # они складываются в минуты. Роутер обязан подниматься на том, что уже
+    # лежит на диске — это записанный инвариант, и я его нарушил.
+    #
+    # Обновление уходит в фон и само перезапускает службу, только если что-то
+    # действительно изменилось.
+    lists_refresh_background
+
     userlist_update_all > /dev/null 2>&1
 
     subscription_update_all
@@ -472,13 +533,24 @@ service_control() {
         '{ok: true, action: $a} + $status'
 }
 
+# Количество узлов и признак ответа можно передать снаружи: обзор их уже знает,
+# и повторять сборку пула и запрос к эндпоинту незачем.
 service_status_json() {
-    local enabled=0 running=0 answering=0 nodes=0
+    local nodes="${1:-}" answering_in="${2:-}"
+    local enabled=0 running=0 answering=0
 
     [ -x /etc/rc.d/S99xkop ] && enabled=1
     engine_process_running && running=1
-    engine_answers && answering=1
-    nodes=$(subscription_pool_all | jq 'length' 2> /dev/null)
+
+    if [ -n "$answering_in" ]; then
+        answering="$answering_in"
+    else
+        engine_answers && answering=1
+    fi
+
+    if [ -z "$nodes" ]; then
+        nodes=$(subscription_pool_all | jq 'length' 2> /dev/null)
+    fi
     [ -n "$nodes" ] || nodes=0
 
     jq -nc \

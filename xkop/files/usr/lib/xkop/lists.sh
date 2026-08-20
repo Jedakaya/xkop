@@ -19,6 +19,35 @@ XKOP_GEOSITE_URL='https://github.com/itdoginfo/allow-domains/releases/latest/dow
 # actually loadable before it replaces the working one.
 XKOP_GEOSITE_PROBE='russia-inside'
 
+# Загрузка списка: сначала напрямую, потом через движок.
+#
+# Списки живут на GitHub, а он у части провайдеров недоступен ровно тогда,
+# когда роутер и нужен. Туннель при этом уже работает - им и пользуемся:
+# у движка есть локальный socks на петле, тот самый, через который ходит
+# разбор маршрута. Своего адреса он наружу не отдаёт, отдельного порта
+# не требует и появляется вместе с движком.
+#
+# Порядок именно такой: прямая загрузка дешевле и не зависит от того, поднялся
+# ли движок. Через туннель - только когда прямая не вышла, и об этом сказано
+# в журнале, чтобы «списки обновились» не скрывало, каким путём.
+lists_download() {
+    local url="$1" target="$2" timeout="${3:-60}"
+
+    curl -fsSL --max-time "$timeout" -o "$target" "$url" 2> /dev/null && return 0
+
+    command -v xray > /dev/null 2>&1 || return 1
+    engine_answers 2> /dev/null || return 1
+
+    if curl -fsSL --max-time "$timeout" \
+        --socks5-hostname "127.0.0.1:${XKOP_PROBE_PORT:-10809}" \
+        -o "$target" "$url" 2> /dev/null; then
+        log_info "список взят через движок: напрямую не отдался"
+        return 0
+    fi
+
+    return 1
+}
+
 lists_geosite_path() {
     printf '%s/geosite.dat' "$XKOP_ASSET_DIR"
 }
@@ -76,7 +105,7 @@ lists_subnet_fetch() {
     mkdir -p "$(lists_subnet_dir)" "$XKOP_RUN_DIR"
     tmp="$XKOP_RUN_DIR/subnet-$name.lst"
 
-    if ! curl -fsSL --max-time 60 -o "$tmp" "$XKOP_SUBNET_BASE/$name.lst" 2> /dev/null; then
+    if ! lists_download "$XKOP_SUBNET_BASE/$name.lst" "$tmp" 60; then
         [ -s "$target" ] && return 0
         log_warn "подсети списка $category не скачались"
         return 1
@@ -178,7 +207,7 @@ lists_update() {
     # RAM first: a failed download must cost no flash and leave the working
     # list exactly where it was.
     tmp="$XKOP_RUN_DIR/geosite.dat"
-    if ! curl -fsSL --max-time 120 -o "$tmp" "$XKOP_GEOSITE_URL" 2> /dev/null; then
+    if ! lists_download "$XKOP_GEOSITE_URL" "$tmp" 120; then
         log_warn "список доменов не скачался, остаётся прежний"
         return 1
     fi

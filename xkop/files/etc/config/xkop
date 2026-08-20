@@ -19,6 +19,8 @@ config settings 'settings'
 	option wan_interface 'wan'
 	option output_interface ''
 	#list excluded_source_ip '192.168.1.3'
+	# Источники, чей трафик уходит в туннель целиком, минуя списки.
+	#list fully_routed_ip '192.168.1.10'
 	option lists_update_interval '1d'
 	# Насколько лучше должен быть другой узел, чтобы на него перешли.
 	# Без допуска выбор скачет от шума измерения между близкими узлами.

@@ -186,9 +186,25 @@ def dns_servers:
     | (if fakeip_enabled and ((routed_domains | length) > 0) then
         [ {address: "fakedns", domains: routed_domains} ]
        else [] end)
+    # Отбраковка выученного ставится на КАЖДЫЙ сервер группы, а не только
+    # на первый.
+    #
+    # Это и есть режим локального резолвера из docs/dns.md: AdGuard Home или
+    # Pi-hole стоит рядом с шифрованным, заданным IP-литералом, и пока всё
+    # честно - отвечает тот, кто быстрее, обычно локальный, и фильтрация
+    # работает. Когда провайдер перехватывает апстрим локального, сам он жив
+    # и отвечает - проверкой доступности это не поймать вовсе, - но в ответах
+    # появляется заглушка. Без unexpectedIPs на локальном сервере такой ответ
+    # проходит насквозь, и роутер уверенно раздаёт подменённые адреса.
+    #
+    # Соседние серверы движок считает одной группой, когда у них совпадают
+    # domains, expectedIPs и unexpectedIPs, - поэтому одинаковый список здесь
+    # не только правилен по смыслу, но и держит группу целой.
     + [ ({address: $primary}
          + (if ($learned | length) > 0 then {unexpectedIPs: $learned} else {} end)) ]
-    + [ settings.dns_extra[]? | {address: .} ]
+    + [ settings.dns_extra[]?
+        | ({address: .}
+           + (if ($learned | length) > 0 then {unexpectedIPs: $learned} else {} end)) ]
     # Опорный резолвер нужен ровно в одном случае: основной задан именем,
     # и это имя надо где-то разрешить. Движок берёт для этого другой сервер
     # из списка, поэтому опорный и добавляется сюда - последним, чтобы он
@@ -314,6 +330,24 @@ def observatory_section:
         }
       end;
 
+# Источники, чей трафик уходит в туннель целиком, независимо от списков.
+#
+# Правило по источнику, а не по назначению: адрес клиента переживает перехват
+# tproxy, поэтому движок его видит и может по нему решать. Стоит выше правил
+# привязок - иначе список доменов успел бы отправить часть трафика напрямую,
+# и "целиком" перестало бы быть целиком. Но ниже правила локальных сетей:
+# устройство, которому велено ходить через туннель, всё равно должно
+# дотягиваться до соседа по локальной сети и до самого роутера.
+def fully_routed_rules($has_pool):
+    (settings.fully_routed_ip // []) as $ips
+    | if ($ips | length) == 0 then
+        []
+      else
+        [ {type: "field", source: $ips}
+          + (if $has_pool then {balancerTag: "pool"}
+             else {outboundTag: service_tags.direct} end) ]
+      end;
+
 # A binding becomes at most two rules: one for names, one for addresses. An
 # empty profile produces nothing at all rather than a rule that matches
 # everything - which is the difference between "nothing is routed" and
@@ -385,6 +419,7 @@ def routing_section:
                     "::1/128", "fc00::/7", "fe80::/10"
                 ]}
             ]
+            + fully_routed_rules($has_pool)
             + ( [ .bindings[]? ] | sort_by(.order // 100)
                 | map(binding_rules(.; $has_pool)) | add // [] )
         ),

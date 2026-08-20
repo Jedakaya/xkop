@@ -68,11 +68,17 @@ nodes_selection_json() {
 
 # Everything about the pool in one answer: what the subscription gave, what the
 # observatory thinks of it, and which one is being used right now.
+# Готовые метрики и пул можно передать снаружи.
+#
+# Обзор собирает всё одной командой, и без этого метрики забирались дважды,
+# а пул собирался дважды: nodes_json делал свой запрос, а вызывающий - свой.
+# На роутере это секунды, и браузер успевал оборвать запрос раньше ответа -
+# ровно та ошибка "XHR request aborted by browser", которую видел пользователь.
 nodes_json() {
-    local pool stats selection
+    local pool="${1:-}" stats="${2:-}" selection
 
-    pool=$(subscription_pool_all)
-    stats=$(cmd_stats 2> /dev/null)
+    [ -n "$pool" ] || pool=$(subscription_pool_all)
+    [ -n "$stats" ] || stats=$(cmd_stats 2> /dev/null)
     selection=$(nodes_selection_json)
 
     jq -nc \

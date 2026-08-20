@@ -7,6 +7,10 @@ USE_PROCD=1
 NAME=xkop
 CONFIG=/etc/xkop/config.json
 
+# rc.common задаёт initscript сам; запасное значение — на случай запуска
+# файла напрямую, минуя обвязку.
+initscript=${initscript:-/etc/init.d/xkop}
+
 start_service() {
     # Everything that must happen before the engine: scheduled jobs, the
     # subscriptions, the configuration, the firewall rules. The order lives in
@@ -48,7 +52,12 @@ reload_service() {
 }
 
 service_triggers() {
-    procd_add_reload_trigger "xkop"
+    # Перезапуск при правке настроек. Форма взята у podkop дословно:
+    # procd_add_config_trigger внутри своего блока триггеров, с явным
+    # указанием файла службы и действия. Смена списков в интерфейсе иначе
+    # сохранялась в uci и не доезжала до движка — настройки менялись,
+    # маршрутизация нет.
+    PROCD_RELOAD_DELAY=2000
 
     # Подъём интерфейса. При старте роутера WAN обычно ещё не готов: подписки
     # не приезжают, и роутер поднимается на кэше или вовсе без узлов. Когда
@@ -57,9 +66,9 @@ service_triggers() {
     interfaces=$(uci -q get xkop.settings.wan_interface)
     [ -n "$interfaces" ] || interfaces="wan"
 
-    PROCD_RELOAD_DELAY=5000
-
     procd_open_trigger
+    procd_add_config_trigger "config.change" "xkop" "$initscript" restart
+
     local iface
     for iface in $interfaces; do
         procd_add_interface_trigger "interface.*.up" "$iface" /usr/bin/xkop wan_up

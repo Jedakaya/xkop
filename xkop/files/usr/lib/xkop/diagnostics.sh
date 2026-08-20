@@ -274,14 +274,26 @@ diag_global_json() {
 # What asks the network stays out of here on purpose. Live probes belong to a
 # button the user presses, not to opening a page.
 diag_dashboard_json() {
+    local stats pool answering=0 nodes_count
+
+    # Всё, что стоит дорого, добывается ровно один раз и передаётся дальше.
+    # Раньше метрики забирались трижды, пул собирался дважды, а движок
+    # опрашивался четырьмя разными способами - на роутере это складывалось
+    # в секунды, и браузер обрывал запрос, не дождавшись ответа.
+    stats=$(cmd_stats)
+    pool=$(subscription_pool_all)
+    nodes_count=$(printf '%s' "$pool" | jq 'length' 2> /dev/null)
+    [ -n "$nodes_count" ] || nodes_count=0
+    [ "$(printf '%s' "$stats" | jq -r '.ok')" = "true" ] && answering=1
+
     jq -nc \
-        --argjson status "$(service_status_json)" \
+        --argjson status "$(service_status_json "$nodes_count" "$answering")" \
         --argjson engine "$(cmd_check_engine)" \
         --argjson nft "$(diag_nft_json)" \
         --argjson subscriptions "$(cmd_subscriptions)" \
         --argjson lists "$(lists_present && echo true || echo false)" \
-        --argjson stats "$(cmd_stats)" \
-        --argjson nodes "$(nodes_json)" \
+        --argjson stats "$stats" \
+        --argjson nodes "$(nodes_json "$pool" "$stats")" \
         --argjson canary "$(canary_cached_json)" \
         --argjson system "$(diag_system_json)" \
         --arg uptime "$(diag_uptime)" \

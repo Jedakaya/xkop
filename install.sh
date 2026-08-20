@@ -414,9 +414,20 @@ install_client_panel() {
 
     configure_panel_uhttpd
 
-    # Порт проверяется запросом, а не объявляется.
-    if command -v curl > /dev/null 2>&1 \
-        && curl -fsS --max-time 5 -o /dev/null "http://127.0.0.1:$PANEL_PORT/"; then
+    # Порт проверяется запросом, а не объявляется. С несколькими попытками:
+    # uhttpd после перезапуска поднимается не мгновенно, и первый же отказ
+    # соединения выдавался за неработающую панель.
+    answered=0
+    for attempt in 1 2 3 4 5; do
+        if command -v curl > /dev/null 2>&1 \
+            && curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PANEL_PORT/"; then
+            answered=1
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$answered" -eq 1 ]; then
         note "панель отвечает на порту $PANEL_PORT"
     else
         warn "панель разложена, но порт $PANEL_PORT не ответил"

@@ -159,6 +159,31 @@ check "интерфейс наружу проставлен прямому ис�
 dns_case '{"dns_extra": []}'
 check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings // null')"
 
+# --- источники целиком в туннель ------------------------------------------
+
+dns_case '{"fully_routed_ip": ["192.168.1.10", "192.168.1.11"], "dns_extra": []}'
+check "правило по источнику появилось" '["192.168.1.10","192.168.1.11"]' "$(q dns-case.json '[.routing.rules[] | select(.source? != null) | .source] | first')"
+check "источник уходит в пул" '"pool"' "$(q dns-case.json '.routing.rules[] | select(.source? != null) | .balancerTag')"
+
+# Локальные сети должны решаться раньше: устройству, которому велено ходить
+# через туннель, всё равно нужен сосед по сети и сам роутер.
+check "локальные сети решаются раньше" 'true' "$(q dns-case.json '(.routing.rules | map(has("ip")) | index(true)) < (.routing.rules | map(has("source")) | index(true))')"
+
+dns_case '{"fully_routed_ip": [], "dns_extra": []}'
+check "без настройки правила по источнику нет" 'null' "$(q dns-case.json '[.routing.rules[] | select(.source? != null)] | first // null')"
+
+# --- локальный резолвер как апстрим ---------------------------------------
+#
+# Перехват апстрима AdGuard Home проверкой доступности не поймать: сам он жив
+# и отвечает. Ловится он отбраковкой ответа, а значит выученное Канарейкой
+# обязано стоять на КАЖДОМ сервере группы, а не только на первом.
+
+dns_case '{"dns_server": "192.168.1.1", "dns_type": "udp", "dns_extra": ["https://8.8.8.8/dns-query"], "canary_learned": ["46.191.166.9"]}'
+check "отбраковка стоит на локальном резолвере" 'true' "$(q dns-case.json '[.dns.servers[] | select(.address == "192.168.1.1")] | first | has("unexpectedIPs")')"
+check "и на шифрованном рядом" 'true' "$(q dns-case.json '[.dns.servers[] | select(.address == "https://8.8.8.8/dns-query")] | first | has("unexpectedIPs")')"
+check "списки отбраковки совпадают, группа цела" '1' "$(q dns-case.json '[.dns.servers[] | select(.unexpectedIPs != null) | .unexpectedIPs] | unique | length')"
+check "и опрашиваются одновременно" 'true' "$(q dns-case.json '.dns.enableParallelQuery')"
+
 # Каждый случай выше — это конфигурация, которую движок ещё не видел. Проверять
 # только структуру тут мало: схема адреса и sockopt.interface либо принимаются
 # движком, либо роняют запуск, и мнение теста в этом вопросе ничего не стоит.
@@ -182,6 +207,8 @@ if command -v "$XRAY" > /dev/null 2>&1; then
     dns_case_engine "опорный резолвер" '{"dns_server": "dns.adguard-dns.com", "dns_type": "doh", "dns_bootstrap": "77.88.8.8", "dns_extra": []}'
     dns_case_engine "интерфейс наружу" '{"output_interface": "wan", "dns_extra": []}'
     dns_case_engine "параллельный опрос" '{"dns_parallel": "1", "dns_extra": []}'
+    dns_case_engine "источники целиком в туннель" '{"fully_routed_ip": ["192.168.1.10"], "dns_extra": []}'
+    dns_case_engine "локальный резолвер рядом с шифрованным" '{"dns_server": "192.168.1.1", "dns_type": "udp", "dns_extra": ["https://8.8.8.8/dns-query"], "canary_learned": ["46.191.166.9"]}'
 fi
 
 if command -v "$XRAY" > /dev/null 2>&1; then

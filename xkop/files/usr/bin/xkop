@@ -54,7 +54,7 @@ cmd_check_engine() {
 
     if command -v "$XKOP_ENGINE_BIN" > /dev/null 2>&1; then
         installed=1
-        version=$("$XKOP_ENGINE_BIN" version 2> /dev/null | head -n 1 | awk '{print $2}')
+        version=$(engine_version_cached)
         if [ -n "$version" ]; then
             version_ok=1
             engine_supports hysteria2 "$version" && hysteria2=1
