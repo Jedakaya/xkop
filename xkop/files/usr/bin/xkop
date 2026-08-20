@@ -306,7 +306,7 @@ main() {
             /etc/init.d/xkop "$command" > /dev/null 2>&1
             jq -nc --arg action "$command" '{ok: true, result: $action}'
             ;;
-        show_engine_config | show_sing_box_config)
+        show_config | show_engine_config | show_sing_box_config)
             cmd_show_engine_config
             ;;
         version | --version | -v)
