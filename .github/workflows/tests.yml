@@ -33,6 +33,34 @@ jobs:
             exit 1
           fi
 
+      # Правила nft на роутере применяются одним файлом: nft либо принимает
+      # весь набор, либо не применяет ничего. Проверять их только строковым
+      # сравнением, как делают tests/nft.test.sh, недостаточно — набор может
+      # быть «правильным» на вид и отвергнутым разбором. Здесь его читает
+      # настоящий nft.
+      - name: nftables ruleset parses
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nftables
+          cat > /tmp/gen.sh <<'SH'
+          . xkop/files/usr/lib/xkop/constants.sh
+          . xkop/files/usr/lib/xkop/nft.sh
+          nft_ruleset "$1" "$2" "$3" "$4"
+          SH
+          set -e
+          for case in "br-lan||0|0" "br-lan eth1|192.168.1.5|0|0" \
+                      "br-lan||1|0" "br-lan|192.168.1.5|1|1"; do
+            IFS='|' read -r ifaces excl fake ntp <<EOF
+          $case
+          EOF
+            echo "== набор: интерфейсы='$ifaces' исключения='$excl' fakeip=$fake ntp=$ntp"
+            sh /tmp/gen.sh "$ifaces" "$excl" "$fake" "$ntp" > /tmp/ruleset.nft
+            sudo nft -c -f /tmp/ruleset.nft || {
+              echo "nft отверг набор правил"
+              cat -n /tmp/ruleset.nft
+              exit 1
+            }
+          done
+
       # Панель LuCI на роутере не проверить, но синтаксис — можно, и это
       # ловит опечатку раньше, чем она приедет на железо.
       - name: JavaScript syntax

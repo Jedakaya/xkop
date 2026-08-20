@@ -159,6 +159,31 @@ check "интерфейс наружу проставлен прямому ис�
 dns_case '{"dns_extra": []}'
 check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings // null')"
 
+# Каждый случай выше — это конфигурация, которую движок ещё не видел. Проверять
+# только структуру тут мало: схема адреса и sockopt.interface либо принимаются
+# движком, либо роняют запуск, и мнение теста в этом вопросе ничего не стоит.
+if command -v "$XRAY" > /dev/null 2>&1; then
+    dns_case_engine() {
+        dns_case "$2"
+        total=$((total + 1))
+        if "$XRAY" run -test -format json -c "$work/dns-case.json" > "$work/dns-case.err" 2>&1; then
+            echo "ok   движок принимает: $1"
+        else
+            echo "FAIL движок отверг: $1"
+            head -n 3 "$work/dns-case.err" | sed 's/^/     /'
+            failed=$((failed + 1))
+        fi
+    }
+
+    dns_case_engine "DoH со схемой" '{"dns_server": "dns.adguard-dns.com", "dns_type": "doh", "dns_extra": []}'
+    dns_case_engine "DoT" '{"dns_server": "1.1.1.1", "dns_type": "dot", "dns_extra": []}'
+    dns_case_engine "QUIC" '{"dns_server": "1.1.1.1", "dns_type": "quic", "dns_extra": []}'
+    dns_case_engine "TCP" '{"dns_server": "1.1.1.1", "dns_type": "tcp", "dns_extra": []}'
+    dns_case_engine "опорный резолвер" '{"dns_server": "dns.adguard-dns.com", "dns_type": "doh", "dns_bootstrap": "77.88.8.8", "dns_extra": []}'
+    dns_case_engine "интерфейс наружу" '{"output_interface": "wan", "dns_extra": []}'
+    dns_case_engine "параллельный опрос" '{"dns_parallel": "1", "dns_extra": []}'
+fi
+
 if command -v "$XRAY" > /dev/null 2>&1; then
     for f in with-pool empty-pool fakeip protection; do
         total=$((total + 1))
