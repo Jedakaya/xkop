@@ -187,7 +187,7 @@ nft_routing_rule_remove() {
 # всех профилей, привязанных к непрямым каналам. Ручные подсети, списки
 # сообщества и списки по ссылке — всё это уже сведено в профиль.
 nft_routed_addresses() {
-    local id
+    local id channel profile
 
     printf '%s
 ' "$XKOP_FAKEIP_RANGE"
