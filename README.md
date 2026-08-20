@@ -21,7 +21,19 @@ tproxy, procd, dnsmasq и интерфейсы — только логикой �
 ## Установка
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh)
+sh <(wget -O - https://github.com/Jedakaya/xkop/releases/latest/download/install.sh)
+```
+
+Установщик берётся из релиза, а не с ветки, намеренно: `raw.githubusercontent`
+отдаёт файл с пограничного кэша и параметры запроса игнорирует, поэтому
+исправленный скрипт может ещё несколько минут приезжать старым. Файл релиза
+привязан к тегу и подменён быть не может.
+
+Свежее ветки, если нужно именно оно, — по хэшу коммита:
+
+```sh
+SHA=$(wget -qO- https://api.github.com/repos/Jedakaya/xkop/commits/main | grep -o '"sha": *"[0-9a-f]*"' | head -1 | cut -d'"' -f4)
+sh <(wget -O - https://raw.githubusercontent.com/Jedakaya/xkop/$SHA/install.sh)
 ```
 
 Ставит пакетами: зависимости, движок под архитектуру роутера, xkop и LuCI,
