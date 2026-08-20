@@ -1,0 +1,55 @@
+#!/bin/sh
+# shellcheck shell=ash
+# xkop - traffic router for OpenWrt on Xray-core.
+#
+# Command surface, not implementation: every command lives in a library under
+# /usr/lib/xkop and prints JSON. Human readable output goes to the log, not to
+# stdout - the client panel and LuCI parse what they get here.
+
+XKOP_LIB_DIR='/usr/lib/xkop'
+
+. "$XKOP_LIB_DIR/constants.sh"
+. "$XKOP_LIB_DIR/stats.sh"
+
+show_help() {
+    cat << 'EOF'
+xkop - маршрутизатор трафика на Xray-core
+
+Команды:
+  stats             метрики движка: трафик по исходящим, распределение,
+                    состояние узлов
+  version           версия пакета
+  help              эта справка
+
+Всё, кроме help, выводит JSON. Нулевой код возврата означает, что команда
+отработала, а не что всё хорошо: состояние передаётся полями.
+EOF
+}
+
+main() {
+    local command="$1"
+    [ $# -gt 0 ] && shift
+
+    case "$command" in
+        stats)
+            cmd_stats "$@"
+            ;;
+        version | --version | -v)
+            printf '{"version":"%s"}\n' "$XKOP_VERSION"
+            ;;
+        help | --help | -h | '')
+            show_help
+            ;;
+        *)
+            # The command did not run at all, and that is the one case where a
+            # non-zero exit code carries meaning. Built through jq because the
+            # name comes from outside and a quote in it would otherwise produce
+            # broken JSON.
+            jq -nc --arg command "$command" \
+                '{ok: false, error: "unknown_command", detail: {command: $command}}'
+            return 1
+            ;;
+    esac
+}
+
+main "$@"
