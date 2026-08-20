@@ -22,10 +22,37 @@ config settings 'settings'
 	option disable_quic '0'
 
 # The direct and blocked channels always exist - bindings refer to them and
-# they are not removable. Every other channel, subscription, profile and
-# binding is created by the user, see docs/uci-schema.md for examples.
+# they are not removable. See docs/uci-schema.md for the full schema.
 config channel 'direct'
 	option type 'direct'
 
 config channel 'blocked'
 	option type 'block'
+
+# The tunnel channel is ready before there is anything to put in it. Without a
+# subscription its pool is empty, the bindings pointing at it fall through to
+# direct, and the router starts - an absent subscription makes a channel
+# inactive, never fatal.
+config channel 'tunnel'
+	option type 'subscription'
+	list subscription 'main'
+	option strategy 'leastPing'
+
+# Add the link and the subscription starts working:
+#   uci set xkop.main.url='https://…' && uci commit xkop && /etc/init.d/xkop restart
+config subscription 'main'
+	option enabled '1'
+	option url ''
+	option update_interval '1h'
+
+# Категории проверены на самом файле списков: russia-inside, geoblock, block,
+# youtube, discord, meta, news, porn, hdrezka, anime.
+config profile 'blocked_ru'
+	option title 'Заблокированное в РФ'
+	list community_list 'russia-inside'
+	list community_list 'geoblock'
+
+config binding 'b1'
+	option profile 'blocked_ru'
+	option channel 'tunnel'
+	option order '10'
