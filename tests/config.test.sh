@@ -109,8 +109,16 @@ check "в режиме fakeip появляется слушатель DNS" '["tp
 check "журнал доступа включён по умолчанию" "true"     "$(q with-pool.json '.log.access != "none"')"
 check "слушатель для проб только на петле" '"127.0.0.1"'     "$(q with-pool.json '.inbounds[] | select(.tag == "probe-in") | .listen')"
 check "распознавание разворачивает поддельный адрес" "true"     "$(q fakeip.json '.inbounds[0].sniffing.destOverride | index("fakedns") != null')"
-check "поддельные адреса только для маршрутизируемых имён" '["geosite:google","example.com","ads.example.com"]'     "$(q fakeip.json '.dns.servers[0].domains')"
-check "выученная заглушка ушла в отбраковку" '["46.191.166.9"]'     "$(q fakeip.json '.dns.servers[1].unexpectedIPs')"
+check "поддельные адреса только для маршрутизируемых имён" '["geosite:google","example.com","ads.example.com"]' "$(q fakeip.json '[.dns.servers[] | select(.address == "fakedns")] | first | .domains')"
+
+# Исключения обязаны стоять РАНЬШЕ подделки: FakeDNS отвечает на всё, что
+# до него дошло, и фильтр по доменам у него не работает — проверено на живом
+# движке. Единственный способ оставить имя настоящим — перечислить его выше.
+check "исключения стоят раньше подделки" 'true' "$(q fakeip.json '(.dns.servers | map(.address) | index("fakedns")) > 0')"
+check "адрес пробы не подделывается" 'true' "$(q fakeip.json '[.dns.servers[] | select(.address != "fakedns") | .domains[]?] | any(startswith("domain:connectivitycheck"))')"
+check "серверы узлов не подделываются" 'true' "$(q fakeip.json '[.dns.servers[] | select(.address != "fakedns") | .domains[]?] | any(startswith("domain:de1."))')"
+check "резолвер-адрес в исключения не попадает" 'false' "$(q fakeip.json '[.dns.servers[] | .domains[]?] | any(. == "domain:8.8.8.8")')"
+check "выученная заглушка ушла в отбраковку" '["46.191.166.9"]' "$(q fakeip.json '[.dns.servers[] | select(.unexpectedIPs != null)] | first | .unexpectedIPs')"
 check "параллельный опрос при нескольких серверах" "true"     "$(q fakeip.json '.dns.enableParallelQuery')"
 check "запросы с DNS-слушателя уходят резолверу" '"dns-out"'     "$(q fakeip.json '.routing.rules[0].outboundTag')"
 check "пул поддельных адресов задан" '"198.18.0.0/15"'     "$(q fakeip.json '.fakedns.ipPool')"
@@ -235,7 +243,10 @@ check "без настройки правила по источнику нет" 
 # обязано стоять на КАЖДОМ сервере группы, а не только на первом.
 
 dns_case '{"dns_server": "192.168.1.1", "dns_type": "udp", "dns_extra": ["https://8.8.8.8/dns-query"], "canary_learned": ["46.191.166.9"]}'
-check "отбраковка стоит на локальном резолвере" 'true' "$(q dns-case.json '[.dns.servers[] | select(.address == "192.168.1.1")] | first | has("unexpectedIPs")')"
+# Локальный резолвер встречается дважды: первым — как исключение для имён,
+# которые нельзя подделывать, и следом как обычный сервер группы. Отбраковка
+# нужна на том, который отвечает на всё; исключению она не мешает и не важна.
+check "отбраковка стоит на локальном резолвере" 'true' "$(q dns-case.json '[.dns.servers[] | select(.address == "192.168.1.1" and (.domains | not))] | first | has("unexpectedIPs")')"
 check "и на шифрованном рядом" 'true' "$(q dns-case.json '[.dns.servers[] | select(.address == "https://8.8.8.8/dns-query")] | first | has("unexpectedIPs")')"
 check "списки отбраковки совпадают, группа цела" '1' "$(q dns-case.json '[.dns.servers[] | select(.unexpectedIPs != null) | .unexpectedIPs] | unique | length')"
 check "и опрашиваются одновременно" 'true' "$(q dns-case.json '.dns.enableParallelQuery')"

@@ -217,11 +217,52 @@ def is_ipv4($s):
     | length == 4
     and all(.[]; (. != "") and (explode | all(. >= 48 and . <= 57)));
 
+# Имена, которые подделывать нельзя ни при каких условиях.
+#
+# FakeDNS в Xray отвечает на всё, что до него дошло: фильтр по доменам у него
+# в списке серверов не работает - проверено на живом движке, подделка досталась
+# и example.com, и ya.ru при указанном одном домене. Единственный способ
+# оставить имя настоящим - перечислить его РАНЬШЕ подделки.
+#
+# Что обязано остаться настоящим:
+#
+#   - адрес пробы. Наблюдатель ходит по нему мимо маршрутизации, прямо через
+#     узел, и с поддельным адресом проба не проходит никогда. На роутере это
+#     выглядело так: туннель работает, а все узлы числятся мёртвыми;
+#   - имена самих серверов подписки. Движку надо соединиться с ними, и если
+#     имя подделано, соединяться не с чем вовсе;
+#   - имя резолвера, если оно задано именем.
+def dns_real_domains:
+    (
+        [ settings.probe_url // "https://connectivitycheck.gstatic.com/generate_204" ]
+        | map(
+            (. | split("//") | last | split("/") | first | split(":") | first)
+            | select(. != null and . != "")
+            | "domain:" + .
+          )
+    )
+    + [ .pool[]?.outbound
+        | (.settings.vnext[0].address? // .settings.servers[0].address? // .settings.address?)
+        | select(. != null and . != "")
+        | select((is_ipv4(.) | not))
+        | "domain:" + .
+      ]
+    + (
+        (settings.dns_server // "") as $s
+        | ($s | split("//") | last | split("/") | first | split(":") | first) as $host
+        | if $host == "" or is_ipv4($host) then [] else [ "domain:" + $host ] end
+      )
+    | unique;
+
 def dns_servers:
     resolver_address(settings.dns_server) as $primary
     | (settings.canary_learned // []) as $learned
     | (settings.dns_bootstrap // "") as $bootstrap
-    | (if fakeip_enabled and ((routed_domains | length) > 0) then
+    # Исключения идут первыми, иначе подделка заберёт их себе.
+    | (if fakeip_enabled and ((dns_real_domains | length) > 0) then
+        [ {address: $primary, domains: dns_real_domains} ]
+       else [] end)
+    + (if fakeip_enabled and ((routed_domains | length) > 0) then
         [ {address: "fakedns", domains: routed_domains} ]
        else [] end)
     # Отбраковка выученного ставится на КАЖДЫЙ сервер группы, а не только
