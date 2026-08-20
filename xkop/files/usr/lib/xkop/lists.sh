@@ -49,10 +49,37 @@ lists_validate() {
     XRAY_LOCATION_ASSET="$dir" "$engine" run -test -format json -c "$probe" > /dev/null 2>&1
 }
 
+# Пора ли обновлять список по настройке lists_update_interval. Настройка
+# существовала и не читалась никем: список качался по расписанию cron, а
+# значение в конфигурации выглядело действующим. Теперь оно и решает.
+lists_due() {
+    local interval age target now mtime
+
+    target=$(lists_geosite_path)
+    [ -f "$target" ] || return 0
+
+    interval=$(config_uci_get settings lists_update_interval 2> /dev/null)
+    [ -n "$interval" ] || interval="1d"
+    age=$(subscription_interval_seconds "$interval")
+    [ -n "$age" ] && [ "$age" -gt 0 ] || return 0
+
+    now=$(date +%s 2> /dev/null)
+    mtime=$(date -r "$target" +%s 2> /dev/null)
+    case "$now$mtime" in
+        '' | *[!0-9]*) return 0 ;;
+    esac
+
+    [ "$((now - mtime))" -ge "$age" ]
+}
+
 lists_update() {
     local tmp size_kb free_kb target
     target=$(lists_geosite_path)
     mkdir -p "$XKOP_RUN_DIR" "$XKOP_ASSET_DIR"
+
+    if [ "${1:-}" != "force" ] && ! lists_due; then
+        return 2
+    fi
 
     # RAM first: a failed download must cost no flash and leave the working
     # list exactly where it was.

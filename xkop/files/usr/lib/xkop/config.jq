@@ -171,15 +171,31 @@ def resolver_address($raw):
       else "https://" + (if ($s | index("/")) != null then $s else $s + "/dns-query" end)
       end;
 
+# Четыре числа через точку и ничего кроме. Записано без регулярных выражений
+# намеренно: jq в OpenWrt собран без oniguruma, и test/match там не существует
+# вовсе - программа с ними падает на роутере, пройдя все проверки здесь.
+def is_ipv4($s):
+    ($s | split("."))
+    | length == 4
+    and all(.[]; (. != "") and (explode | all(. >= 48 and . <= 57)));
+
 def dns_servers:
     resolver_address(settings.dns_server) as $primary
     | (settings.canary_learned // []) as $learned
+    | (settings.dns_bootstrap // "") as $bootstrap
     | (if fakeip_enabled and ((routed_domains | length) > 0) then
         [ {address: "fakedns", domains: routed_domains} ]
        else [] end)
     + [ ({address: $primary}
          + (if ($learned | length) > 0 then {unexpectedIPs: $learned} else {} end)) ]
-    + [ settings.dns_extra[]? | {address: .} ];
+    + [ settings.dns_extra[]? | {address: .} ]
+    # Опорный резолвер нужен ровно в одном случае: основной задан именем,
+    # и это имя надо где-то разрешить. Движок берёт для этого другой сервер
+    # из списка, поэтому опорный и добавляется сюда - последним, чтобы он
+    # отвечал только на то, на что не ответил основной. Когда основной задан
+    # адресом, разрешать нечего, и лишний резолвер только путал бы.
+    + (if $bootstrap != "" and (is_ipv4(settings.dns_server // "") | not)
+       then [ {address: $bootstrap} ] else [] end);
 
 def dns_section:
     {
@@ -187,16 +203,29 @@ def dns_section:
         # for a name that will be faked sends the client out over a path the
         # rules do not cover.
         queryStrategy: (settings.query_strategy // "UseIPv4"),
-        enableParallelQuery: ((((settings.dns_extra // []) | length) > 0)),
+        # Параллельный опрос: либо его попросили явно, либо резолверов больше
+        # одного и спрашивать их по очереди значит ждать самый медленный.
+        enableParallelQuery: (
+            ((settings.dns_parallel // "0") == "1")
+            or (((settings.dns_extra // []) | length) > 0)
+        ),
         servers: dns_servers
     };
 
 # Service outbounds, always present and always named the same: the stats
 # command derives traffic roles from these tags, and a rename here silently
 # moves traffic into the wrong column of the dashboard.
+# Интерфейс наружу задаётся только когда его назвали. По умолчанию решает
+# таблица маршрутизации роутера, и это правильное поведение: привязка к имени
+# интерфейса ломается ровно там, где его переименовали или где их два.
+def output_sockopt:
+    (settings.output_interface // "")
+    | if . == "" then {} else {sockopt: {interface: .}} end;
+
 def service_outbounds:
     [
-        {tag: service_tags.direct, protocol: "freedom", settings: {domainStrategy: "UseIP"}},
+        ({tag: service_tags.direct, protocol: "freedom", settings: {domainStrategy: "UseIP"}}
+         + (if (output_sockopt | length) > 0 then {streamSettings: output_sockopt} else {} end)),
         {tag: service_tags.block, protocol: "blackhole"}
     ]
     + (if fakeip_enabled then [ {tag: service_tags.dns, protocol: "dns"} ] else [] end);

@@ -279,6 +279,9 @@ main() {
         global_check)
             diag_global_json
             ;;
+        started_check)
+            service_started_check
+            ;;
         dashboard)
             diag_dashboard_json
             ;;

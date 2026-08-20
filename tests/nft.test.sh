@@ -73,6 +73,18 @@ check "в режиме fakeip цепочка появляется" "yes" "$(has 
 check "поддельный диапазон метится" "yes" "$(has "$fake" "ip daddr $XKOP_FAKEIP_RANGE")"
 check "уже помеченное не метится повторно" "yes"     "$(has "$fake" "meta mark & $XKOP_NFT_MARK == $XKOP_NFT_MARK return")"
 
+# Синхронизация времени мимо движка. Настройка exclude_ntp существовала
+# в конфигурации и не делала ничего: правило под неё никто не выпускал.
+ntp=$(nft_ruleset "br-lan" "" 0 1)
+check "без настройки NTP не выделен" "no" "$(has "$simple" 'udp dport 123 return')"
+check "с настройкой NTP уходит мимо" "yes" "$(has "$ntp" 'udp dport 123 return')"
+
+# Выпуск NTP обязан стоять раньше разметки, иначе метка уже проставлена и
+# возвращать поздно.
+ntp_line=$(printf '%s' "$ntp" | grep -n 'udp dport 123 return' | cut -d: -f1)
+mark_line=$(printf '%s' "$ntp" | grep -n 'meta mark set' | head -n 1 | cut -d: -f1)
+check "выпуск NTP раньше разметки" "yes"     "$([ "$ntp_line" -lt "$mark_line" ] && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

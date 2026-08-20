@@ -122,6 +122,43 @@ check "публичные DoH закрыты на 443" "19"     "$(q protection.
 check "quic отключается отдельно" '"block"'     "$(q protection.json '.routing.rules[] | select(.protocol? != null) | .outboundTag')"
 check "защита стоит раньше правил привязок" "true"     "$(q protection.json '([.routing.rules[] | select(.port? == 853)] | length) > 0 and (.routing.rules | map(has("port")) | index(true)) < (.routing.rules | map(has("balancerTag")) | index(true))')"
 
+# --- настройки, которые раньше объявлялись и не читались ------------------
+#
+# dns_type, dns_bootstrap, dns_parallel и output_interface лежали в
+# /etc/config/xkop и в интерфейсе, а генератор их не смотрел: что ни выбери,
+# на роутер уезжало одно и то же. Проверки ниже держат каждую подключённой.
+
+dns_case() {
+    "$JQ" --arg path "$work/access.log" --argjson s "$1" '.settings.access_log_path = $path | .settings += $s' "$FIXTURES/fakeip.json" | "$JQ" -f "$PROGRAM" > "$work/dns-case.json"
+}
+
+dns_case '{"dns_server": "dns.adguard-dns.com", "dns_type": "doh", "dns_extra": []}'
+check "DoH получает схему https" '"https://dns.adguard-dns.com/dns-query"' "$(q dns-case.json '[.dns.servers[] | .address] | map(select(startswith("https://"))) | first')"
+
+dns_case '{"dns_server": "1.1.1.1", "dns_type": "dot", "dns_extra": []}'
+check "DoT получает схему tls" '"tls://1.1.1.1"' "$(q dns-case.json '[.dns.servers[] | .address] | map(select(startswith("tls://"))) | first')"
+
+dns_case '{"dns_server": "8.8.8.8", "dns_type": "udp", "dns_extra": []}'
+check "обычный UDP остаётся адресом" '"8.8.8.8"' "$(q dns-case.json '[.dns.servers[] | .address] | map(select(. == "8.8.8.8")) | first')"
+
+dns_case '{"dns_server": "https+local://1.1.1.1/dns-query", "dns_type": "udp", "dns_extra": []}'
+check "вписанная схема побеждает выбор способа" '"https+local://1.1.1.1/dns-query"' "$(q dns-case.json '[.dns.servers[] | .address] | map(select(startswith("https+local://"))) | first')"
+
+dns_case '{"dns_server": "dns.adguard-dns.com", "dns_type": "doh", "dns_bootstrap": "77.88.8.8", "dns_extra": []}'
+check "опорный резолвер добавлен для имени" '"77.88.8.8"' "$(q dns-case.json '[.dns.servers[] | .address] | last')"
+
+dns_case '{"dns_server": "8.8.8.8", "dns_type": "udp", "dns_bootstrap": "77.88.8.8", "dns_extra": []}'
+check "для адреса опорный не нужен" 'false' "$(q dns-case.json '[.dns.servers[] | .address] | any(. == "77.88.8.8")')"
+
+dns_case '{"dns_parallel": "1", "dns_extra": []}'
+check "параллельный опрос включается настройкой" 'true' "$(q dns-case.json '.dns.enableParallelQuery')"
+
+dns_case '{"output_interface": "wan2", "dns_extra": []}'
+check "интерфейс наружу проставлен прямому исходящему" '"wan2"' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.interface')"
+
+dns_case '{"dns_extra": []}'
+check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings // null')"
+
 if command -v "$XRAY" > /dev/null 2>&1; then
     for f in with-pool empty-pool fakeip protection; do
         total=$((total + 1))

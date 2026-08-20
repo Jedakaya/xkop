@@ -113,10 +113,127 @@ engine_wait() {
 
 # Everything that has to happen before the engine is started, in the order it
 # has to happen in.
+# Bounded command runner. busybox changed timeout's calling convention: older
+# builds expect "timeout -t SECS CMD", newer ones "timeout SECS CMD". Guessing
+# wrong does not fail loudly - the old build takes the number for a program
+# name - so both forms are probed once against a trivial command.
+service_run_bounded() {
+    local secs="$1" pid waited=0
+    shift
+
+    if timeout 1 true > /dev/null 2>&1; then
+        timeout "$secs" "$@" > /dev/null 2>&1
+        return 0
+    fi
+
+    if timeout -t 1 true > /dev/null 2>&1; then
+        timeout -t "$secs" "$@" > /dev/null 2>&1
+        return 0
+    fi
+
+    "$@" > /dev/null 2>&1 &
+    pid=$!
+    while [ "$waited" -lt "$secs" ] && kill -0 "$pid" 2> /dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    kill "$pid" 2> /dev/null
+    return 0
+}
+
+# Compared against a moment that has demonstrably already passed rather than a
+# hardcoded year, which is stale the day it is written.
+service_clock_is_plausible() {
+    local now ref
+
+    now=$(date +%s 2> /dev/null)
+    case "$now" in
+        '' | *[!0-9]*) return 1 ;;
+    esac
+
+    ref=$(date -r /usr/bin/xkop +%s 2> /dev/null)
+    [ -n "$ref" ] || ref=$(date -r /etc/openwrt_release +%s 2> /dev/null)
+    case "$ref" in
+        '' | *[!0-9]*) return 0 ;;
+    esac
+
+    [ "$now" -ge "$ref" ]
+}
+
+# DoH and TLS both refuse to work with a clock that is years off, and the error
+# they give names the certificate, not the clock. "ntpd -q" returns only once
+# the clock is actually set and has no timeout of its own, so unreachable time
+# servers hang it forever - which is why the wait is bounded and only happens
+# when the clock is known to be wrong.
+service_sync_time() {
+    [ -x /usr/sbin/ntpd ] || return 0
+    service_clock_is_plausible && return 0
+
+    log_info "часы не выставлены, жду синхронизацию (до 60 с)"
+    service_run_bounded 60 /usr/sbin/ntpd -q -p 194.190.168.1 -p 216.239.35.0 \
+        -p 216.239.35.4 -p 162.159.200.1 -p 162.159.200.123
+
+    service_clock_is_plausible \
+        || log_warn "время синхронизировать не удалось, DoH и TLS могут не пройти"
+    return 0
+}
+
+# With br_netfilter loaded and bridge-nf-call-iptables on, packets bridged
+# between LAN ports are handed to netfilter a second time, and the tproxy
+# interception then sees traffic it has no business seeing - or misses traffic
+# it should. Taken from podkop, where this was found on real hardware.
+service_br_netfilter_disable() {
+    grep -qs '^br_netfilter ' /proc/modules || return 0
+    [ "$(sysctl -n net.bridge.bridge-nf-call-iptables 2> /dev/null)" = "1" ] || return 0
+
+    log_info "br_netfilter включён, выключаю его вмешательство в мост"
+    sysctl -w net.bridge.bridge-nf-call-iptables=0 > /dev/null 2>&1
+    sysctl -w net.bridge.bridge-nf-call-ip6tables=0 > /dev/null 2>&1
+    return 0
+}
+
+# What has to be there before anything is attempted. Each answer names what to
+# do about it: "не запускается" without a reason is the failure this project
+# exists to avoid.
+service_check_requirements() {
+    local version
+
+    if ! command -v "${XKOP_ENGINE_BIN:-xray}" > /dev/null 2>&1; then
+        log_error "движок не установлен: поставьте пакет xray-xkop или запустите xkop update"
+        return 1
+    fi
+
+    version=$("${XKOP_ENGINE_BIN:-xray}" version 2> /dev/null | head -n 1 | awk '{print $2}')
+    if [ -n "$version" ]; then
+        # Третий ответ engine_supports — «границу не устанавливали». Молчим
+        # именно в нём: выдать незнание за отказ было бы той же ложью.
+        engine_supports hysteria2 "$version"
+        [ "$?" = "1" ] && log_warn "движок $version старше проверенного $XKOP_MIN_VERSION_HYSTERIA2, Hysteria2 не соберётся"
+    fi
+
+    command -v jq > /dev/null 2>&1 \
+        || { log_error "нет jq, без него не собрать конфигурацию"; return 1; }
+    command -v nft > /dev/null 2>&1 \
+        || log_warn "нет nft, правила применить будет нечем"
+
+    # Чужой перехват dnsmasq виден прямо в его настройках, и молча ломает наш.
+    if grep -qsE 'doh_backup_noresolv|doh_backup_server|doh_server' /etc/config/dhcp; then
+        log_warn "в /etc/config/dhcp следы https-dns-proxy, они мешают нашему DNS"
+    fi
+
+    return 0
+}
+
 service_prepare() {
     mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" "$XKOP_CACHE_DIR"
 
+    # Задачи по расписанию — первыми: это единственный путь роутера обратно
+    # в рабочее состояние без человека, и отказ ниже не должен его отнять.
     cron_install
+
+    service_check_requirements || return 1
+    service_br_netfilter_disable
+    service_sync_time
 
     # Списки нужны движку в момент загрузки конфигурации: правило geosite он
     # разворачивает сразу, и без файла отвергает конфигурацию целиком.
@@ -155,7 +272,131 @@ service_prepare() {
     return 0
 }
 
+# Фоновое восстановление после неудачного старта.
+#
+# При включении роутера WAN обычно ещё не готов: подписки не приезжают, узлов
+# нет, движок либо не поднимается, либо поднимается пустым. Единственная
+# починка без человека — попробовать ещё раз, и это ровно тот инвариант,
+# который в podkop куплен днём отладки.
+#
+# Перенято оттуда целиком, вместе с тремя решениями, каждое из которых там
+# исправляло настоящий отказ:
+#
+#   - пауза растёт от попытки к попытке и упирается в потолок: роутер в долгой
+#     аварии не должен перезапускаться каждые полминуты часами;
+#   - «подписка не изменилась» не означает «всё хорошо». Если подписка свежая,
+#     а движок всё равно лежит, обновлять её второй раз бессмысленно — надо
+#     перезапускать службу. Именно на этом мёртвый роутер оставался мёртвым;
+#   - pid-файл убирается ДО перезапуска: перезапуск проходит через teardown,
+#     который убивает то, на что этот файл указывает, то есть родителя самого
+#     перезапуска.
+XKOP_RECOVERY_PID="/var/run/xkop-recovery.pid"
+XKOP_RECOVERY_ATTEMPTS="$XKOP_STATE_DIR/recovery-attempts"
+
+recovery_running() {
+    local pid
+    [ -f "$XKOP_RECOVERY_PID" ] || return 1
+    pid=$(cat "$XKOP_RECOVERY_PID" 2> /dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null
+}
+
+recovery_stop() {
+    local pid
+    [ -f "$XKOP_RECOVERY_PID" ] || return 0
+    pid=$(cat "$XKOP_RECOVERY_PID" 2> /dev/null)
+    [ -n "$pid" ] && kill "$pid" 2> /dev/null
+    rm -f "$XKOP_RECOVERY_PID"
+}
+
+recovery_start() {
+    local attempts wait
+
+    if recovery_running; then
+        log_info "фоновое восстановление уже работает"
+        return 0
+    fi
+    rm -f "$XKOP_RECOVERY_PID"
+
+    attempts=$(cat "$XKOP_RECOVERY_ATTEMPTS" 2> /dev/null)
+    case "$attempts" in
+        '' | *[!0-9]*) attempts=0 ;;
+    esac
+    mkdir -p "$XKOP_STATE_DIR"
+    echo "$((attempts + 1))" > "$XKOP_RECOVERY_ATTEMPTS"
+
+    wait=10
+    while [ "$attempts" -gt 0 ] && [ "$wait" -lt 300 ]; do
+        wait=$((wait * 2))
+        attempts=$((attempts - 1))
+    done
+    [ "$wait" -gt 300 ] && wait=300
+
+    (
+        trap 'rm -f "$XKOP_RECOVERY_PID"' EXIT INT TERM
+
+        sleep "$wait"
+        delay=30
+
+        while true; do
+            # Признак успеха — появившийся пул, а не код возврата обновления:
+            # обновление обходит подписки по их расписанию и завершается
+            # нулём, даже когда ни одна не ответила. Условие на нём было бы
+            # пустым, и восстановление вырождалось бы в один перезапуск.
+            subscription_update_all force > /dev/null 2>&1
+            pool=$(subscription_pool_all 2> /dev/null | jq 'length' 2> /dev/null)
+            case "$pool" in
+                '' | *[!0-9]*) pool=0 ;;
+            esac
+
+            if [ "$pool" -gt 0 ]; then
+                if engine_answers; then
+                    log_info "восстановление удалось, движок отвечает"
+                    rm -f "$XKOP_RECOVERY_PID" "$XKOP_RECOVERY_ATTEMPTS"
+                    exit 0
+                fi
+
+                # Узлы приехали — их надо донести до движка. Обновление само
+                # ничего не перезапускает, и без этого пул есть, а движок
+                # работает на прежней, пустой конфигурации.
+                log_info "подписки приехали, перезапускаю службу с новой конфигурацией"
+                config_generate > /dev/null 2>&1
+                rm -f "$XKOP_RECOVERY_PID"
+                /etc/init.d/xkop restart > /dev/null 2>&1
+                exit 0
+            fi
+
+            log_warn "подписки ещё недоступны, повтор через ${delay} с"
+            sleep "$delay"
+            [ "$delay" -lt 300 ] && delay=$((delay * 2))
+            [ "$delay" -gt 300 ] && delay=300
+        done
+    ) &
+
+    echo $! > "$XKOP_RECOVERY_PID"
+    log_warn "взведено фоновое восстановление, первая попытка через ${wait} с"
+}
+
+# Вызывается из start_service_done: старт вернул ноль и движок поднялся —
+# разные утверждения, и различать их тут и есть работа.
+service_started_check() {
+    if engine_wait 20; then
+        rm -f "$XKOP_RECOVERY_ATTEMPTS"
+        return 0
+    fi
+
+    log_error "движок не ответил после запуска"
+    recovery_start
+    return 1
+}
+
 service_teardown() {
+    recovery_stop
+
+    # Задачи по расписанию снимаются здесь и только здесь. Остановленный xkop,
+    # который продолжает по будильнику обновлять подписки и перегенерировать
+    # конфигурацию, — это остановленный только на словах.
+    cron_remove
+
     nft_clear
     dnsmasq_protection_clear
     dnsmasq_restore

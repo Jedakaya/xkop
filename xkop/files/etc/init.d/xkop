@@ -32,9 +32,11 @@ start_service() {
 }
 
 start_service_done() {
-    # The engine is asked, then checked. A process in the list may be the old
-    # one; the metrics endpoint answers only when ours is up.
-    /usr/bin/xkop check_engine > /dev/null 2>&1 || true
+    # Движок спрашивают, а не предполагают: процесс в списке может быть старым,
+    # а эндпоинт метрик отвечает только когда поднялся наш. Не ответил —
+    # взводится фоновое восстановление, потому что при включении роутера WAN
+    # обычно ещё не готов и чинить это некому.
+    /usr/bin/xkop started_check > /dev/null 2>&1 || true
 }
 
 stop_service() {

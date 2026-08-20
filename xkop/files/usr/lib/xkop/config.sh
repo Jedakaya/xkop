@@ -43,6 +43,10 @@ config_settings_json() {
         --arg disable_quic "$(config_uci_get settings disable_quic)" \
         --arg dns_mode "$(config_uci_get settings dns_mode)" \
         --arg dns_server "$(config_uci_get settings dns_server)" \
+        --arg dns_type "$(config_uci_get settings dns_type)" \
+        --arg dns_bootstrap "$(config_uci_get settings dns_bootstrap)" \
+        --arg dns_parallel "$(config_uci_get settings dns_parallel)" \
+        --arg output_interface "$(config_uci_get settings output_interface)" \
         --arg dns_address "$XKOP_DNS_INBOUND_ADDRESS" \
         --arg dns_port "$XKOP_DNS_INBOUND_PORT" \
         --arg fakeip_range "$XKOP_FAKEIP_RANGE" \
@@ -52,7 +56,11 @@ config_settings_json() {
             dns_mode: (if $dns_mode == "" then "off" else $dns_mode end),
             block_client_doh: (if $block_client_doh == "" then "0" else $block_client_doh end),
             disable_quic: (if $disable_quic == "" then "0" else $disable_quic end),
-            dns_server: (if $dns_server == "" then "1.1.1.1" else $dns_server end),
+            dns_server: (if $dns_server == "" then "8.8.8.8" else $dns_server end),
+            dns_type: (if $dns_type == "" then "doh" else $dns_type end),
+            dns_bootstrap: $dns_bootstrap,
+            dns_parallel: (if $dns_parallel == "" then "0" else $dns_parallel end),
+            output_interface: $output_interface,
             dns_address: $dns_address,
             dns_port: (($dns_port | tonumber?) // 53),
             fakeip_range: $fakeip_range,

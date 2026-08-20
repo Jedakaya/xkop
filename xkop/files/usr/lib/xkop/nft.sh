@@ -19,7 +19,7 @@
 # router loses its network and someone has to drive to it.
 
 nft_ruleset() {
-    local interfaces="$1" excluded="$2" fakeip="${3:-0}"
+    local interfaces="$1" excluded="$2" fakeip="${3:-0}" exclude_ntp="${4:-0}"
     local ifname_elements="" excluded_elements=""
 
     for iface in $interfaces; do
@@ -77,6 +77,14 @@ fi)
         ip6 daddr @local6 return
 $(if [ -n "$excluded_elements" ]; then echo "        ip saddr @excluded4 return"; fi)
 
+$(if [ "$exclude_ntp" = "1" ]; then
+cat << NTP
+        # Синхронизация времени идёт мимо движка. Часы нужны раньше, чем
+        # туннель: сертификат TLS проверяется по времени, и роутер с уехавшими
+        # часами не может починить их через путь, которому сам не верит.
+        udp dport 123 return
+NTP
+fi)
         meta l4proto { tcp, udp } meta mark set $XKOP_NFT_MARK counter
     }
 $(if [ "$fakeip" = "1" ]; then
@@ -128,9 +136,10 @@ nft_routing_rule_remove() {
 }
 
 nft_apply() {
-    local interfaces excluded fakeip=0
+    local interfaces excluded fakeip=0 exclude_ntp=0
 
     [ "$(config_uci_get settings dns_mode 2> /dev/null)" = "fakeip" ] && fakeip=1
+    [ "$(config_uci_get settings exclude_ntp 2> /dev/null)" = "1" ] && exclude_ntp=1
 
     interfaces=$(subscription_config_list settings source_interface | tr '\n' ' ')
     [ -n "$(printf '%s' "$interfaces" | tr -d ' ')" ] || interfaces="br-lan"
@@ -143,7 +152,7 @@ nft_apply() {
 
     nft delete table inet "$XKOP_NFT_TABLE" 2> /dev/null || true
 
-    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
         log_error "правила nft отвергнуты: $(head -n 1 "$XKOP_RUN_DIR/nft.err" 2> /dev/null)"
         return 1
     fi

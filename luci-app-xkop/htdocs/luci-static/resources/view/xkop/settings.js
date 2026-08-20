@@ -232,11 +232,6 @@ function dns(map) {
   o.optional = true;
   o.depends("dns_mode", "fakeip");
 
-  o = s.option(form.Flag, "dns_failover", _("Запасной путь"),
-    _("Если резолвер не отвечает, спросить обычным способом, а не остаться без имён."));
-  o.default = "1";
-  o.depends("dns_mode", "fakeip");
-
   o = s.option(form.Flag, "canary_enabled", _("Канарейка"),
     _("Обнаружение подмены DNS провайдером: спрашивает то, чего не может существовать, и по ответу узнаёт адрес заглушки. Выученное движок отбраковывает сам."));
   o.default = "1";
