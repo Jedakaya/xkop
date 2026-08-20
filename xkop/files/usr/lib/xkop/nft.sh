@@ -19,7 +19,7 @@
 # router loses its network and someone has to drive to it.
 
 nft_ruleset() {
-    local interfaces="$1" excluded="$2"
+    local interfaces="$1" excluded="$2" fakeip="${3:-0}"
     local ifname_elements="" excluded_elements=""
 
     for iface in $interfaces; do
@@ -79,6 +79,21 @@ $(if [ -n "$excluded_elements" ]; then echo "        ip saddr @excluded4 return"
 
         meta l4proto { tcp, udp } meta mark set $XKOP_NFT_MARK counter
     }
+$(if [ "$fakeip" = "1" ]; then
+cat << FAKEIP
+
+    # Traffic the router itself starts towards a fake address. The client
+    # rules above never see it - it is not routed, it is generated here - and
+    # without this the router cannot reach a name it faked for itself.
+    chain output {
+        type route hook output priority -150; policy accept;
+
+        ip daddr @local4 return
+        meta mark & $XKOP_NFT_MARK == $XKOP_NFT_MARK return
+        ip daddr $XKOP_FAKEIP_RANGE meta l4proto { tcp, udp } meta mark set $XKOP_NFT_MARK counter
+    }
+FAKEIP
+fi)
 
     chain divert {
         type filter hook prerouting priority -100; policy accept;
@@ -113,7 +128,9 @@ nft_routing_rule_remove() {
 }
 
 nft_apply() {
-    local interfaces excluded
+    local interfaces excluded fakeip=0
+
+    [ "$(config_uci_get settings dns_mode 2> /dev/null)" = "fakeip" ] && fakeip=1
 
     interfaces=$(subscription_config_list settings source_interface | tr '\n' ' ')
     [ -n "$(printf '%s' "$interfaces" | tr -d ' ')" ] || interfaces="br-lan"
@@ -126,7 +143,7 @@ nft_apply() {
 
     nft delete table inet "$XKOP_NFT_TABLE" 2> /dev/null || true
 
-    if ! nft_ruleset "$interfaces" "$excluded" | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
         log_error "правила nft отвергнуты: $(head -n 1 "$XKOP_RUN_DIR/nft.err" 2> /dev/null)"
         return 1
     fi

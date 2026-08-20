@@ -16,6 +16,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/config.sh"
 . "$XKOP_LIB_DIR/lists.sh"
 . "$XKOP_LIB_DIR/nft.sh"
+. "$XKOP_LIB_DIR/dnsmasq.sh"
 . "$XKOP_LIB_DIR/service.sh"
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,

@@ -41,6 +41,7 @@ trap 'rm -rf "$work"' EXIT
 
 "$JQ" -f "$PROGRAM" "$FIXTURES/with-pool.json" > "$work/with-pool.json"
 "$JQ" -f "$PROGRAM" "$FIXTURES/empty-pool.json" > "$work/empty-pool.json"
+"$JQ" -f "$PROGRAM" "$FIXTURES/fakeip.json" > "$work/fakeip.json"
 
 q() { "$JQ" -c "$2" "$work/$1"; }
 
@@ -89,8 +90,21 @@ check "без узлов наблюдения нет" "false" \
 check "без узлов привязка уходит напрямую" '"direct"' \
     "$(q empty-pool.json '.routing.rules[] | select(.domain?) | .outboundTag')"
 
+# Режим fakeip: имена решаются DNS-слоем движка, а не именем внутри соединения.
+check "по умолчанию DNS не трогается" "false"     "$(q with-pool.json 'has("dns")')"
+check "по умолчанию поддельных адресов нет" "false"     "$(q with-pool.json 'has("fakedns")')"
+check "по умолчанию слушателя DNS нет" '["tproxy-in"]'     "$(q with-pool.json '[.inbounds[].tag]')"
+
+check "в режиме fakeip появляется слушатель DNS" '["tproxy-in","dns-in"]'     "$(q fakeip.json '[.inbounds[].tag]')"
+check "распознавание разворачивает поддельный адрес" "true"     "$(q fakeip.json '.inbounds[0].sniffing.destOverride | index("fakedns") != null')"
+check "поддельные адреса только для маршрутизируемых имён" '["geosite:google","example.com","ads.example.com"]'     "$(q fakeip.json '.dns.servers[0].domains')"
+check "выученная заглушка ушла в отбраковку" '["46.191.166.9"]'     "$(q fakeip.json '.dns.servers[1].unexpectedIPs')"
+check "параллельный опрос при нескольких серверах" "true"     "$(q fakeip.json '.dns.enableParallelQuery')"
+check "запросы с DNS-слушателя уходят резолверу" '"dns-out"'     "$(q fakeip.json '.routing.rules[0].outboundTag')"
+check "пул поддельных адресов задан" '"198.18.0.0/15"'     "$(q fakeip.json '.fakedns.ipPool')"
+
 if command -v "$XRAY" > /dev/null 2>&1; then
-    for f in with-pool empty-pool; do
+    for f in with-pool empty-pool fakeip; do
         total=$((total + 1))
         if "$XRAY" run -test -format json -c "$work/$f.json" > "$work/$f.err" 2>&1; then
             echo "ok   движок принимает конфигурацию: $f"

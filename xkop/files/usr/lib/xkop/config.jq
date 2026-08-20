@@ -64,13 +64,72 @@ def tproxy_inbound:
         streamSettings: {sockopt: {tproxy: "tproxy"}},
         sniffing: {
             enabled: true,
-            destOverride: ["http", "tls", "quic"],
+            # "fakedns" is what turns a fake address back into the name it
+            # stands for. Without it a faked destination reaches the rules as
+            # an address from a reserved range and matches nothing.
+            destOverride: (
+                ["http", "tls", "quic"]
+                + (if (settings.dns_mode // "off") == "fakeip" then ["fakedns"] else [] end)
+            ),
             routeOnly: true
         }
     };
 
+def profile_domains($profile):
+    ([ $profile.community_list[]? | "geosite:\(.)" ] + [ $profile.domain[]? ])
+    | map(select(. != null and . != ""));
+
+def profile_ips($profile):
+    [ $profile.subnet[]? ] | map(select(. != null and . != ""));
+
+def fakeip_enabled: (settings.dns_mode // "off") == "fakeip";
+
+# Client queries arrive here after dnsmasq is pointed at this address. It is a
+# plain listener: what to answer is decided by the dns section, not here.
+def dns_inbound:
+    {
+        tag: "dns-in",
+        protocol: "dokodemo-door",
+        listen: (settings.dns_address // "127.0.0.43"),
+        port: (settings.dns_port // 53),
+        settings: {address: "127.0.0.1", port: 53, network: "tcp,udp"}
+    };
+
 def inbounds_section:
-    [ tproxy_inbound ];
+    [ tproxy_inbound ]
+    + (if fakeip_enabled then [ dns_inbound ] else [] end);
+
+# Domains that are routed through a channel rather than straight out. Only
+# these get a fake address: faking everything would hand a fake answer to
+# traffic that was going direct anyway, and anything not passing through the
+# engine - the router's own requests, for instance - would be left holding an
+# address that leads nowhere.
+def routed_domains:
+    [
+        .bindings[]?
+        | select((.channel.type // "direct") != "direct")
+        | profile_domains(.profile)[]
+    ];
+
+def dns_servers:
+    (settings.dns_server // "1.1.1.1") as $primary
+    | (settings.canary_learned // []) as $learned
+    | (if fakeip_enabled and ((routed_domains | length) > 0) then
+        [ {address: "fakedns", domains: routed_domains} ]
+       else [] end)
+    + [ ({address: $primary}
+         + (if ($learned | length) > 0 then {unexpectedIPs: $learned} else {} end)) ]
+    + [ settings.dns_extra[]? | {address: .} ];
+
+def dns_section:
+    {
+        # IPv4 only for now: a fake address pool is IPv4, and answering AAAA
+        # for a name that will be faked sends the client out over a path the
+        # rules do not cover.
+        queryStrategy: (settings.query_strategy // "UseIPv4"),
+        enableParallelQuery: ((((settings.dns_extra // []) | length) > 0)),
+        servers: dns_servers
+    };
 
 # Service outbounds, always present and always named the same: the stats
 # command derives traffic roles from these tags, and a rename here silently
@@ -79,7 +138,8 @@ def service_outbounds:
     [
         {tag: service_tags.direct, protocol: "freedom", settings: {domainStrategy: "UseIP"}},
         {tag: service_tags.block, protocol: "blackhole"}
-    ];
+    ]
+    + (if fakeip_enabled then [ {tag: service_tags.dns, protocol: "dns"} ] else [] end);
 
 def node_outbounds:
     [ .pool[]? | .outbound ];
@@ -121,13 +181,6 @@ def observatory_section:
         }
       end;
 
-def profile_domains($profile):
-    ([ $profile.community_list[]? | "geosite:\(.)" ] + [ $profile.domain[]? ])
-    | map(select(. != null and . != ""));
-
-def profile_ips($profile):
-    [ $profile.subnet[]? ] | map(select(. != null and . != ""));
-
 # A binding becomes at most two rules: one for names, one for addresses. An
 # empty profile produces nothing at all rather than a rule that matches
 # everything - which is the difference between "nothing is routed" and
@@ -151,6 +204,13 @@ def routing_section:
     | {
         domainStrategy: "IPIfNonMatch",
         rules: (
+            (if fakeip_enabled then
+                # Everything arriving at the DNS listener is answered by the
+                # engine's own resolver. First rule, because a query must never
+                # fall through to the routing below and leave as traffic.
+                [ {type: "field", inboundTag: ["dns-in"], outboundTag: service_tags.dns} ]
+             else [] end)
+            +
             [
                 # Anything aimed at the local network stays local. Written out
                 # rather than as "geoip:private" on purpose: that spelling pulls
@@ -175,6 +235,9 @@ def routing_section:
 # the engine refuses the whole configuration with "not all dependencies are
 # resolved", which is a dead router.
 observatory_section as $observatory
+| fakeip_enabled as $fakeip
+| dns_section as $dns
+| (settings.fakeip_range // "198.18.0.0/15") as $fakeip_range
 | {
     log: log_section,
     stats: stats_section,
@@ -185,3 +248,6 @@ observatory_section as $observatory
     routing: routing_section
 }
 | if $observatory != null then . + {burstObservatory: $observatory} else . end
+| if $fakeip then
+    . + {dns: $dns, fakedns: {ipPool: $fakeip_range, poolSize: 65535}}
+  else . end

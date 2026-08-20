@@ -35,7 +35,22 @@ config_settings_json() {
         --arg strategy "$(config_uci_get settings strategy)" \
         --arg probe_url "$(config_uci_get settings probe_url)" \
         --arg probe_interval "$(config_uci_get settings probe_interval)" \
+        --arg dns_mode "$(config_uci_get settings dns_mode)" \
+        --arg dns_server "$(config_uci_get settings dns_server)" \
+        --arg dns_address "$XKOP_DNS_INBOUND_ADDRESS" \
+        --arg dns_port "$XKOP_DNS_INBOUND_PORT" \
+        --arg fakeip_range "$XKOP_FAKEIP_RANGE" \
+        --argjson dns_extra "$(config_uci_list_json settings dns_extra_server)" \
+        --argjson canary_learned "$(config_uci_list_json settings canary_learned_ip)" \
         '{
+            dns_mode: (if $dns_mode == "" then "off" else $dns_mode end),
+            dns_server: (if $dns_server == "" then "1.1.1.1" else $dns_server end),
+            dns_address: $dns_address,
+            dns_port: (($dns_port | tonumber?) // 53),
+            fakeip_range: $fakeip_range,
+            dns_extra: $dns_extra,
+            canary_learned: $canary_learned
+        } + {
             log_level: (if $log_level == "" then "warning" else $log_level end),
             metrics_port: (($metrics_port | tonumber?) // 11111),
             tproxy_address: $tproxy_address,

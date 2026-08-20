@@ -1,4 +1,8 @@
 config settings 'settings'
+	# off    имена распознаются по самому соединению, dnsmasq не трогается
+	# fakeip движок отвечает поддельными адресами на маршрутизируемые имена,
+	#        dnsmasq переключается на него; проверяется на железе
+	option dns_mode 'off'
 	option dns_type 'doh'
 	option dns_server '8.8.8.8/dns-query'
 	option dns_bootstrap '77.88.8.8'

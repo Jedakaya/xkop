@@ -37,6 +37,7 @@ has() {
 }
 
 simple=$(nft_ruleset "br-lan" "")
+fake=$(nft_ruleset "br-lan" "" 1)
 two=$(nft_ruleset "br-lan br-guest" "192.168.1.3 192.168.1.4")
 
 check "таблица названа по проекту" "yes" "$(has "$simple" "table inet xkop {")"
@@ -64,6 +65,13 @@ mark_priority=$(printf '%s' "$simple" | sed -n 's/.*hook prerouting priority \(-
 divert_priority=$(printf '%s' "$simple" | sed -n 's/.*hook prerouting priority \(-[0-9]*\).*/\1/p' | tail -n 1)
 check "разметка раньше разворота" "yes" \
     "$([ "$mark_priority" -lt "$divert_priority" ] && echo yes || echo no)"
+
+# Свой трафик роутера к поддельному адресу правила клиентов не видят: он не
+# маршрутизируется, он здесь рождается.
+check "без fakeip своей цепочки нет" "no" "$(has "$simple" 'chain output')"
+check "в режиме fakeip цепочка появляется" "yes" "$(has "$fake" 'chain output')"
+check "поддельный диапазон метится" "yes" "$(has "$fake" "ip daddr $XKOP_FAKEIP_RANGE")"
+check "уже помеченное не метится повторно" "yes"     "$(has "$fake" "meta mark & $XKOP_NFT_MARK == $XKOP_NFT_MARK return")"
 
 echo "$((total - failed))/$total"
 

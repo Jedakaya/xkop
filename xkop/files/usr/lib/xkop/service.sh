@@ -112,11 +112,21 @@ service_prepare() {
     fi
 
     nft_apply || log_warn "правила nft не применены, трафик в движок не пойдёт"
+
+    # Резолвер трогается только в режиме fakeip. В обычном режиме имена
+    # распознаются по самому соединению, и dnsmasq остаётся как был.
+    if [ "$(config_uci_get settings dns_mode)" = "fakeip" ]; then
+        dnsmasq_configure || log_warn "dnsmasq не переключён, поддельные адреса выдавать некому"
+    else
+        dnsmasq_restore
+    fi
+
     return 0
 }
 
 service_teardown() {
     nft_clear
+    dnsmasq_restore
 }
 
 service_status_json() {
