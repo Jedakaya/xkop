@@ -17,6 +17,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/lists.sh"
 . "$XKOP_LIB_DIR/nft.sh"
 . "$XKOP_LIB_DIR/dnsmasq.sh"
+. "$XKOP_LIB_DIR/canary.sh"
 . "$XKOP_LIB_DIR/service.sh"
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
@@ -143,6 +144,7 @@ xkop - маршрутизатор трафика на Xray-core
                              панель
   subscription_update [id]   обновить подписку или все сразу
   get_subscription_userinfo  трафик и срок из заголовка подписки
+  canary                     проверка подмены DNS провайдером
   get_status                 состояние службы, движка и правил
   check_engine               установлен ли движок, поднялся ли, отвечает ли
   configure                  собрать конфигурацию движка
@@ -181,6 +183,14 @@ main() {
                 '{ok: $present,
                   result: (if $present then "present" else "missing" end),
                   path: $path}'
+            ;;
+        canary)
+            # Если выученное изменилось, движок держит конфигурацию, которая
+            # больше не соответствует тому, что мы знаем про эту сеть.
+            canary_state_json
+            if [ -s "$XKOP_RUN_DIR/canary.json" ]                && [ "$(jq -r ".changed" "$XKOP_RUN_DIR/canary.json")" = "true" ]; then
+                config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
+            fi
             ;;
         configure)
             cmd_configure

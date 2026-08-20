@@ -42,6 +42,7 @@ trap 'rm -rf "$work"' EXIT
 "$JQ" -f "$PROGRAM" "$FIXTURES/with-pool.json" > "$work/with-pool.json"
 "$JQ" -f "$PROGRAM" "$FIXTURES/empty-pool.json" > "$work/empty-pool.json"
 "$JQ" -f "$PROGRAM" "$FIXTURES/fakeip.json" > "$work/fakeip.json"
+"$JQ" -f "$PROGRAM" "$FIXTURES/protection.json" > "$work/protection.json"
 
 q() { "$JQ" -c "$2" "$work/$1"; }
 
@@ -103,8 +104,15 @@ check "параллельный опрос при нескольких серв�
 check "запросы с DNS-слушателя уходят резолверу" '"dns-out"'     "$(q fakeip.json '.routing.rules[0].outboundTag')"
 check "пул поддельных адресов задан" '"198.18.0.0/15"'     "$(q fakeip.json '.fakedns.ipPool')"
 
+# Защита от обхода: клиент со своим резолвером мимо нас не ходит незаметно.
+check "по умолчанию ничего не блокируется" "0"     "$(q with-pool.json '[.routing.rules[] | select(.port? or .protocol?)] | length')"
+check "порт 853 закрыт целиком" '"block"'     "$(q protection.json '.routing.rules[] | select(.port? == 853) | .outboundTag')"
+check "публичные DoH закрыты на 443" "19"     "$(q protection.json '.routing.rules[] | select(.port? == 443) | .ip | length')"
+check "quic отключается отдельно" '"block"'     "$(q protection.json '.routing.rules[] | select(.protocol? != null) | .outboundTag')"
+check "защита стоит раньше правил привязок" "true"     "$(q protection.json '([.routing.rules[] | select(.port? == 853)] | length) > 0 and (.routing.rules | map(has("port")) | index(true)) < (.routing.rules | map(has("balancerTag")) | index(true))')"
+
 if command -v "$XRAY" > /dev/null 2>&1; then
-    for f in with-pool empty-pool fakeip; do
+    for f in with-pool empty-pool fakeip protection; do
         total=$((total + 1))
         if "$XRAY" run -test -format json -c "$work/$f.json" > "$work/$f.err" 2>&1; then
             echo "ok   движок принимает конфигурацию: $f"

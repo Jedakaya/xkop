@@ -35,6 +35,8 @@ config_settings_json() {
         --arg strategy "$(config_uci_get settings strategy)" \
         --arg probe_url "$(config_uci_get settings probe_url)" \
         --arg probe_interval "$(config_uci_get settings probe_interval)" \
+        --arg block_client_doh "$(config_uci_get settings block_client_doh)" \
+        --arg disable_quic "$(config_uci_get settings disable_quic)" \
         --arg dns_mode "$(config_uci_get settings dns_mode)" \
         --arg dns_server "$(config_uci_get settings dns_server)" \
         --arg dns_address "$XKOP_DNS_INBOUND_ADDRESS" \
@@ -44,6 +46,8 @@ config_settings_json() {
         --argjson canary_learned "$(config_uci_list_json settings canary_learned_ip)" \
         '{
             dns_mode: (if $dns_mode == "" then "off" else $dns_mode end),
+            block_client_doh: (if $block_client_doh == "" then "0" else $block_client_doh end),
+            disable_quic: (if $disable_quic == "" then "0" else $disable_quic end),
             dns_server: (if $dns_server == "" then "1.1.1.1" else $dns_server end),
             dns_address: $dns_address,
             dns_port: (($dns_port | tonumber?) // 53),

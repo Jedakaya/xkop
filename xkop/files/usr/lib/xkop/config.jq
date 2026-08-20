@@ -199,6 +199,34 @@ def binding_rules($binding; $has_pool):
         (if ($ips | length) > 0 then ({type: "field", ip: $ips} + $target) else empty end)
       ];
 
+# Known public DoH resolvers. A client that resolves names on its own never
+# reaches ours: no address of ours is handed out, the traffic quietly stops
+# being routed, and the router looks perfectly healthy while doing it. The list
+# is carried over from podkop, where it was assembled against real clients.
+def doh_addresses: [
+    "1.1.1.1", "1.0.0.1", "1.1.1.2", "1.0.0.2", "1.1.1.3", "1.0.0.3",
+    "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112",
+    "94.140.14.14", "94.140.15.15", "208.67.222.222", "208.67.220.220",
+    "45.90.28.0/24", "45.90.30.0/24", "194.242.2.2",
+    "76.76.2.0/24", "76.76.10.0/24"
+];
+
+# Deliberately off unless asked for. A client with its own resolver on some
+# arbitrary address slips through anyway, and blocking the well known ones
+# breaks whoever was using them on purpose.
+def protection_rules:
+    (if (settings.block_client_doh // "0") == "1" then
+        [
+            # Port 853 carries nothing but DNS - DoT and DoQ both - so the
+            # whole port can go. This is what catches Android's private DNS.
+            {type: "field", port: 853, outboundTag: service_tags.block},
+            {type: "field", ip: doh_addresses, port: 443, outboundTag: service_tags.block}
+        ]
+     else [] end)
+    + (if (settings.disable_quic // "0") == "1" then
+        [ {type: "field", protocol: ["quic"], outboundTag: service_tags.block} ]
+       else [] end);
+
 def routing_section:
     (node_tags | length > 0) as $has_pool
     | {
@@ -210,6 +238,7 @@ def routing_section:
                 # fall through to the routing below and leave as traffic.
                 [ {type: "field", inboundTag: ["dns-in"], outboundTag: service_tags.dns} ]
              else [] end)
+            + protection_rules
             +
             [
                 # Anything aimed at the local network stays local. Written out
