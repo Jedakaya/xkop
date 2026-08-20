@@ -24,6 +24,7 @@ XKOP_REPO=${XKOP_REPO:-Jedakaya/xkop}
 XKOP_REF=${XKOP_REF:-main}
 XKOP_LIB_DIR=/usr/lib/xkop
 PANEL_ROOT=/www-xkop
+PANEL_PORT=8090
 WORK=/tmp/xkop-install
 
 say() { echo; echo "== $*"; }
@@ -125,6 +126,41 @@ install_package_file() {
     fi
 }
 
+# Установка с ветки кладёт те же пути, что и пакет, но менеджер о них не знает.
+# Поставить пакет поверх — это конфликт файлов, а не обновление, и разбираться
+# с ним потом на роутере дороже, чем убрать здесь.
+branch_install_present() {
+    [ -e /usr/bin/xkop ] || return 1
+    if command -v apk > /dev/null 2>&1; then
+        apk info --who-owns /usr/bin/xkop > /dev/null 2>&1 && return 1
+    elif command -v opkg > /dev/null 2>&1; then
+        opkg search /usr/bin/xkop 2> /dev/null | grep -q . && return 1
+    fi
+    return 0
+}
+
+# То же про движок: tools/install-xray-dev.sh кладёт голый бинарник, о котором
+# менеджер не знает, и пакет движка ставится ровно туда же.
+engine_unowned() {
+    [ -e /usr/bin/xray ] || return 1
+    if command -v apk > /dev/null 2>&1; then
+        apk info --who-owns /usr/bin/xray > /dev/null 2>&1 && return 1
+    elif command -v opkg > /dev/null 2>&1; then
+        opkg search /usr/bin/xray 2> /dev/null | grep -q . && return 1
+    fi
+    return 0
+}
+
+branch_install_remove() {
+    note "убираю установку с ветки: пакет положит те же файлы"
+    [ -x /etc/init.d/xkop ] && /etc/init.d/xkop stop > /dev/null 2>&1
+    rm -rf /usr/lib/xkop /www/luci-static/resources/view/xkop
+    rm -f /usr/bin/xkop /etc/init.d/xkop
+    rm -f /usr/share/luci/menu.d/luci-app-xkop.json \
+          /usr/share/rpcd/acl.d/luci-app-xkop.json
+    # /etc/config/xkop остаётся: это единственный файл, где не наше состояние.
+}
+
 asset_url() {
     jq -r --arg p "$1" --arg s "$2" \
         '[.assets[]? | select((.name | startswith($p)) and (.name | endswith($s)))]
@@ -181,10 +217,16 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
         if [ -n "$XKOP_URL" ]; then
             note "версия $VERSION"
 
+            if branch_install_present; then branch_install_remove; fi
+
             # Всё качается в RAM целиком и только потом ставится: отказ
             # на середине загрузки не должен оставлять роутер с половиной.
             if [ -n "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
                 if download "$ENGINE_URL" "$WORK/engine.$FORMAT"; then
+                    if engine_unowned; then
+                        note "убираю движок, поставленный мимо менеджера"
+                        rm -f /usr/bin/xray
+                    fi
                     install_package_file "$WORK/engine.$FORMAT" \
                         && note "движок установлен пакетом" \
                         || warn "движок пакетом не встал"
@@ -265,6 +307,45 @@ service.sh"
         note "/etc/config/xkop оставлен как есть"
     fi
 
+    # LuCI приезжает теми же файлами. Без неё роутер получает команды, но
+    # не получает ни вкладки в «Сервисы», ни дашборда — установка выглядит
+    # удавшейся, а смотреть не на что.
+    say "LuCI"
+    XKOP_LUCI_VIEWS="api.js dashboard.js settings.js xkop.js"
+    luci_ok=1
+    mkdir -p /www/luci-static/resources/view/xkop
+    for view in $XKOP_LUCI_VIEWS; do
+        if fetch_repo_file "luci-app-xkop/htdocs/luci-static/resources/view/xkop/$view" "$WORK/$view"; then
+            cp "$WORK/$view" "/www/luci-static/resources/view/xkop/$view"
+        else
+            warn "не скачался вид LuCI: $view"
+            luci_ok=0
+        fi
+    done
+
+    mkdir -p /usr/share/luci/menu.d /usr/share/rpcd/acl.d
+    for meta in luci/menu.d rpcd/acl.d; do
+        if fetch_repo_file "luci-app-xkop/root/usr/share/$meta/luci-app-xkop.json" "$WORK/luci-meta.json"; then
+            cp "$WORK/luci-meta.json" "/usr/share/$meta/luci-app-xkop.json"
+        else
+            warn "не скачался $meta/luci-app-xkop.json"
+            luci_ok=0
+        fi
+    done
+
+    # Меню LuCI и права rpcd читаются один раз и кэшируются. Без сброса кэша
+    # вкладка не появится до перезагрузки, и установка будет выглядеть
+    # неудавшейся при полностью разложенных файлах.
+    rm -f /tmp/luci-indexcache* 2> /dev/null || true
+    rm -rf /tmp/luci-modulecache 2> /dev/null || true
+    /etc/init.d/rpcd restart > /dev/null 2>&1 || true
+
+    if [ "$luci_ok" -eq 1 ]; then
+        note "LuCI разложена, вкладка «Сервисы → xkop»"
+    else
+        warn "LuCI разложена не полностью"
+    fi
+
     if [ "${XKOP_NO_ENGINE:-0}" != "1" ] && ! command -v xray > /dev/null 2>&1; then
         say "движок"
         if fetch_repo_file "tools/install-xray-dev.sh" "$WORK/install-xray.sh"; then
@@ -295,7 +376,32 @@ if fetch_repo_file "client-panel/index.html" "$WORK/index.html"; then
             warn "не скачалась точка панели: $endpoint"
         fi
     done
-    note "панель в $PANEL_ROOT, порт 8090"
+    # Файлы сами по себе никого не обслуживают: панели нужен свой экземпляр
+    # uhttpd. Раньше установщик писал «панель в /www-xkop, порт 8090», а порт
+    # не слушал никто — сообщение утверждало то, чего не проверяло.
+    if [ -x /etc/init.d/uhttpd ]; then
+        uci -q get uhttpd.xkop > /dev/null 2>&1 || uci set uhttpd.xkop=uhttpd
+        uci -q delete uhttpd.xkop.listen_http
+        uci add_list uhttpd.xkop.listen_http="0.0.0.0:$PANEL_PORT"
+        uci set uhttpd.xkop.home="$PANEL_ROOT"
+        uci set uhttpd.xkop.cgi_prefix='/cgi-bin'
+        uci set uhttpd.xkop.script_timeout='60'
+        uci set uhttpd.xkop.network_timeout='30'
+        uci -q delete uhttpd.xkop.index_page
+        uci add_list uhttpd.xkop.index_page='index.html'
+        uci commit uhttpd
+        /etc/init.d/uhttpd restart > /dev/null 2>&1 || warn "uhttpd не перезапустился"
+
+        # Порт проверяется, а не объявляется.
+        if command -v curl > /dev/null 2>&1 \
+            && curl -fsS --max-time 5 -o /dev/null "http://127.0.0.1:$PANEL_PORT/"; then
+            note "панель отвечает на порту $PANEL_PORT"
+        else
+            warn "панель разложена, но порт $PANEL_PORT не ответил"
+        fi
+    else
+        warn "uhttpd не найден, панель обслуживать некому"
+    fi
 else
     warn "панель не скачалась, xkop это переживёт"
 fi
@@ -320,7 +426,7 @@ cat << EOF
 
   xkop get_status
 
-Панель клиента:  http://\$(адрес роутера):8090
+Панель клиента:  http://ЛОКАЛЬНЫЙ-АДРЕС:$PANEL_PORT
 Настройки целиком: LuCI, «Сервисы → xkop»
 Обновление:      xkop update
 EOF

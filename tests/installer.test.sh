@@ -40,6 +40,28 @@ panel_listed=$(sed -n 's/^ *for endpoint in \(.*\) \\$/\1/p;s/^ *\(routes route-
 
 check "установщик знает про все точки панели" "$panel_have" "$panel_listed"
 
+# То же для LuCI. Забытый вид означает пустую вкладку в «Сервисы», а забытое
+# меню — отсутствие самой вкладки при полностью разложенных файлах. Ровно это
+# и случилось на первой установке с ветки.
+luci_have=$(ls "$ROOT/luci-app-xkop/htdocs/luci-static/resources/view/xkop" | sort | tr '\n' ' ' | sed 's/ *$//')
+luci_listed=$(sed -n 's/^ *XKOP_LUCI_VIEWS="\(.*\)"$/\1/p' "$ROOT/install.sh" \
+    | tr ' \n' '\n\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ *$//')
+
+check "установщик знает про все виды LuCI" "$luci_have" "$luci_listed"
+
+check "установщик кладёт меню LuCI" "yes" \
+    "$(grep -q 'luci/menu.d' "$ROOT/install.sh" && echo yes || echo no)"
+check "установщик кладёт права rpcd" "yes" \
+    "$(grep -q 'rpcd/acl.d' "$ROOT/install.sh" && echo yes || echo no)"
+
+# Меню и права кэшируются: без сброса вкладка не появится до перезагрузки.
+check "установщик сбрасывает кэш LuCI" "yes" \
+    "$(grep -q 'luci-indexcache' "$ROOT/install.sh" && echo yes || echo no)"
+
+# Файлы панели никого не обслуживают сами по себе.
+check "установщик поднимает панель" "yes" \
+    "$(grep -q 'uhttpd.xkop.listen_http' "$ROOT/install.sh" && echo yes || echo no)"
+
 # Файл службы без пакета тоже надо привезти: иначе команды есть, а запускать
 # нечем.
 check "файл службы скачивается" "yes" \
