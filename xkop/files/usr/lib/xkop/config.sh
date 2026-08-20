@@ -189,6 +189,20 @@ config_validate() {
 
 # Generates, validates, installs. Returns 0 when a new configuration is in
 # place, 1 when the old one was kept, 2 when there was nothing to install.
+# Собрана ли конфигурация успешно.
+#
+# config_generate различает три исхода: 0 — установлена новая, 2 — прежняя
+# годится и менять нечего, 1 — отказ. Вызывающие читали «всё, что не ноль»
+# как отказ, и на каждый перезапуск в журнал уходило «новая конфигурация
+# не принята» сразу после «конфигурация не изменилась». Две строки подряд,
+# противоречащие друг другу, и вторая — неправда.
+config_generated_ok() {
+    case "$1" in
+        0 | 2) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 config_generate() {
     local new old
     mkdir -p "$XKOP_RUN_DIR" "$(dirname "$XKOP_CONFIG_PATH")"
