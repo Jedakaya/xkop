@@ -76,6 +76,61 @@ nodes_selection_json() {
         }'
 }
 
+# Задержка до узла, измеренная нами.
+#
+# Наблюдатель движка меряет другое: полный запрос ЧЕРЕЗ узел до адреса пробы,
+# то есть вместе со всей дорогой дальше. Для «жив или мёртв» это годится,
+# для «насколько узел близко» — нет. На живом роутере наблюдатель показывал
+# 371–1187 мс там, где чистое TCP до тех же узлов занимало 73–88 мс, а клиент
+# на телефоне — 153–437. Число, которому нельзя верить, хуже отсутствующего.
+#
+# Меряется только соединение: рукопожатия и запроса здесь не нужно, нужен путь
+# до узла и ничего больше. Раз в пять минут, вместе с удержанием: пять
+# соединений на каждую отрисовку обзора — непозволительная роскошь.
+nodes_rtt_path() {
+    printf '%s/node-rtt.json' "$XKOP_RUN_DIR"
+}
+
+nodes_measure_rtt() {
+    local pool tmp tag host port t
+
+    command -v curl > /dev/null 2>&1 || return 0
+    pool=$(subscription_pool_all 2> /dev/null)
+    [ -n "$pool" ] || return 0
+
+    mkdir -p "$XKOP_RUN_DIR"
+    tmp="$XKOP_RUN_DIR/node-rtt.raw"
+    : > "$tmp"
+
+    printf '%s' "$pool" | jq -r '
+        .[] | [
+            .tag,
+            (.outbound.settings.vnext[0].address? // .outbound.settings.servers[0].address?
+             // .outbound.settings.address? // ""),
+            ((.outbound.settings.vnext[0].port? // .outbound.settings.servers[0].port?
+              // .outbound.settings.port? // 0) | tostring)
+        ] | @tsv' 2> /dev/null > "$XKOP_RUN_DIR/node-addr.tsv"
+
+    while IFS='	' read -r tag host port; do
+        [ -n "$host" ] && [ -n "$port" ] && [ "$port" != "0" ] || continue
+        t=$(curl -s -o /dev/null -m 5 -w '%{time_connect}' "http://$host:$port/" 2> /dev/null)
+        case "$t" in
+            '' | 0.000000 | 0) continue ;;
+        esac
+        printf '%s\t%s\n' "$tag" "$t" >> "$tmp"
+    done < "$XKOP_RUN_DIR/node-addr.tsv"
+
+    if [ -s "$tmp" ]; then
+        jq -R -s -c '
+            split("\n") | map(select(. != "") | split("\t"))
+            | map({key: .[0], value: ((.[1] | tonumber) * 1000 | round)})
+            | from_entries' "$tmp" > "$(nodes_rtt_path)" 2> /dev/null
+    fi
+
+    rm -f "$tmp" "$XKOP_RUN_DIR/node-addr.tsv"
+    return 0
+}
+
 # Everything about the pool in one answer: what the subscription gave, what the
 # observatory thinks of it, and which one is being used right now.
 # Готовые метрики и пул можно передать снаружи.
@@ -95,6 +150,7 @@ nodes_json() {
         --argjson pool "$pool" \
         --argjson stats "${stats:-null}" \
         --argjson selection "$selection" \
+        --argjson rtt "$(cat "$(nodes_rtt_path)" 2> /dev/null || echo '{}')" \
         '
         ($stats.observatory.nodes // []) as $observed
         | {
@@ -110,7 +166,10 @@ nodes_json() {
                     protocol: $node.protocol,
                     subscription: $node.subscription,
                     state: .state,
-                    delay_ms: .delay_ms,
+                    # Своё измерение важнее пробы: оно про узел, а проба —
+                    # про дорогу через узел куда-то ещё.
+                    delay_ms: ($rtt[$node.tag] // .delay_ms),
+                    probe_ms: .delay_ms,
                     selected: ($node.tag == $selection.selected)
                 }
             ],
@@ -213,6 +272,10 @@ nodes_max_delay() {
 }
 
 nodes_keep() {
+    # Заодно обновляем свои замеры задержки: раз в пять минут, не на каждую
+    # отрисовку обзора.
+    nodes_measure_rtt
+
     local selection override current marker mine chosen tolerance max_delay
     local stats alive best best_delay current_delay reason=""
 
