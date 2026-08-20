@@ -1,0 +1,18 @@
+{
+  "luci-app-xkop": {
+    "description": "Доступ к настройкам и командам xkop",
+    "read": {
+      "file": {
+        "/usr/bin/xkop": [ "exec" ],
+        "/etc/init.d/xkop": [ "exec" ]
+      },
+      "ubus": {
+        "service": [ "list" ]
+      },
+      "uci": [ "xkop" ]
+    },
+    "write": {
+      "uci": [ "xkop" ]
+    }
+  }
+}

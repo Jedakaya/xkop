@@ -33,6 +33,14 @@ jobs:
             exit 1
           fi
 
+      # Панель LuCI на роутере не проверить, но синтаксис — можно, и это
+      # ловит опечатку раньше, чем она приедет на железо.
+      - name: JavaScript syntax
+        run: |
+          for f in luci-app-xkop/htdocs/luci-static/resources/view/xkop/*.js; do
+            node --check "$f"
+          done
+
       - name: Shell syntax
         run: |
           for f in xkop/files/usr/bin/xkop xkop/files/usr/lib/xkop/*.sh tests/*.sh; do
