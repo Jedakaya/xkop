@@ -653,7 +653,15 @@ return L.Class.extend({
         return renderSummary(data);
       });
 
+      // В подписи обязано быть всё, что показано в карточке.
+      //
+      // Надпись «работает / остановлен» берётся из svc.engine.running,
+      // а в подписи его не было: служба останавливалась, поле менялось,
+      // подпись оставалась прежней — и карточка продолжала показывать
+      // «работает», пока человек не перезагрузит страницу руками.
       fill("service", key([svc.state, svc.enabled, eng.engine_installed, eng.engine_version,
+        svc.engine ? svc.engine.running : null,
+        svc.engine ? svc.engine.answering : null,
         (data.engine_log || []).length]),
         function () { return renderServiceWidget(data, refresh); });
 
