@@ -474,10 +474,32 @@ function renderExplain() {
         return;
       }
 
+      const roles = {
+        proxy: _("через туннель"),
+        direct: _("напрямую"),
+        blocked: _("заблокировано"),
+        service: _("служебное"),
+      };
+
       output.appendChild(line(_("домен"), r.domain, ""));
-      output.appendChild(line(_("итог"), r.role || _("неизвестно"),
+      output.appendChild(line(_("итог"), roles[r.role] || r.role || _("наблюдения нет"),
         r.outbound ? _("исходящий: ") + r.outbound : ""));
       if (r.why) output.appendChild(line(_("почему"), r.why, ""));
+
+      // Когда наблюдения нет, команда всё равно знает, что говорят правила,
+      // и знает, почему наблюдения нет. Показывать вместо этого одно слово
+      // «неизвестно» — прятать уже полученный ответ.
+      if (!r.observed && r.rule) {
+        output.appendChild(line(_("по правилам"), r.rule.target || "—",
+          r.rule.certain ? "" : _("наблюдением не подтверждено")));
+        if ((r.rule.matched || []).length) {
+          output.appendChild(E("div", { class: "xkop-note" },
+            _("совпало: ") + r.rule.matched.join(", ")));
+        }
+      }
+      if (!r.observed && r.state) {
+        output.appendChild(E("div", { class: "xkop-note" }, r.state));
+      }
       if (r.node) {
         output.appendChild(line(_("узел"), r.node.tag,
           _("подписка: ") + (r.node.subscription || "—")));

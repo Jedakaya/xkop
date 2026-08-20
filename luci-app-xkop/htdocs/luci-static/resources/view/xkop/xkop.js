@@ -17,7 +17,17 @@
 // много, и светлая заливка на тёмной теме делает надпись нечитаемой. Проверять
 // это на каждой теме дорого, а не задавать — бесплатно.
 const CSS = `
-.xkop-dashboard { display: flex; flex-direction: column; gap: 1em; margin-bottom: 1em; }
+/* Обзор живёт внутри поля формы LuCI, а поле занимает лишь часть строки:
+   слева отведено место под подпись, даже когда подписи нет. Из-за этого
+   виджеты жались к левому краю, а справа пустовала треть экрана. Строке
+   с обзором подпись не нужна вовсе — она разворачивается во всю ширину. */
+.cbi-value[data-name="_overview"] { display: block; margin: 0; padding: 0; }
+.cbi-value[data-name="_overview"] > .cbi-value-title { display: none; }
+.cbi-value[data-name="_overview"] > .cbi-value-field {
+  width: 100%; max-width: none; padding: 0; float: none; }
+
+.xkop-dashboard { display: flex; flex-direction: column; gap: 1em;
+  margin-bottom: 1em; width: 100%; }
 
 .xkop-summary { display: flex; align-items: center; gap: .6em;
   padding: .7em 1em; border-radius: 6px; font-weight: bold;
