@@ -322,6 +322,7 @@ diag_dashboard_json() {
         --argjson nodes "$(nodes_json "$pool" "$stats")" \
         --argjson canary "$(canary_cached_json)" \
         --argjson system "$(diag_system_json)" \
+        --arg dns_mode "$(config_uci_get settings dns_mode)" \
         --arg uptime "$(diag_uptime)" \
         --arg version "${XKOP_VERSION:-}" \
         '
@@ -338,7 +339,7 @@ diag_dashboard_json() {
             lists: $lists_status,
             stats: $stats,
             nodes: $nodes,
-            canary: $canary
+            canary: ($canary + {dns_mode: (if $dns_mode == "" then "off" else $dns_mode end)})
         }
         | . + {
             summary: (
