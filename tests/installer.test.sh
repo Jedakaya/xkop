@@ -27,8 +27,8 @@ check() {
 have=$(ls "$ROOT/xkop/files/usr/lib/xkop" | sort | tr '\n' ' ' | sed 's/ *$//')
 
 # Что перечислено в установщике.
-listed=$(sed -n '/^XKOP_LIBS="/,/"$/p' "$ROOT/install.sh" \
-    | sed -e 's/^XKOP_LIBS="//' -e 's/"$//' \
+listed=$(sed -n '/XKOP_LIBS="/,/"$/p' "$ROOT/install.sh" \
+    | sed -e 's/^ *XKOP_LIBS="//' -e 's/"$//' \
     | tr ' \n' '\n\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ *$//')
 
 check "установщик знает про все библиотеки" "$have" "$listed"

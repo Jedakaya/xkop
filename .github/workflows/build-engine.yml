@@ -6,6 +6,8 @@ name: Build engine
 on:
   workflow_dispatch:
   push:
+    tags:
+      - '*'
     paths:
       - 'xray-xkop/**'
       - 'Dockerfile-engine'
@@ -59,10 +61,20 @@ jobs:
             XKOP_TARGET_ARCH=${{ matrix.arch }}
             SDK_IMAGE=ghcr.io/${{ steps.owner.outputs.name }}/xkop-sdk-apk:25.12.0
 
-      - name: Check output
+      # apk не кладёт архитектуру в имя файла, и все восемь пакетов называются
+      # одинаково. В релизе они затёрли бы друг друга, а на роутере нельзя
+      # понять, тот ли скачался. Архитектура дописывается в имя.
+      - name: Check output and name by architecture
         run: |
           ls -l ./bin/${{ matrix.arch }}
           [ -n "$(ls -A ./bin/${{ matrix.arch }})" ] || { echo "пакет не собрался"; exit 1; }
+          for f in ./bin/${{ matrix.arch }}/xray-xkop-*; do
+            [ -e "$f" ] || continue
+            ext="${f##*.}"
+            base=$(basename "$f" ".$ext")
+            mv "$f" "./bin/${{ matrix.arch }}/${base}-${{ matrix.arch }}.${ext}"
+          done
+          ls -l ./bin/${{ matrix.arch }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4.6.2
@@ -71,3 +83,12 @@ jobs:
           path: ./bin/${{ matrix.arch }}/*
           retention-days: 7
           if-no-files-found: error
+
+      # По тегу пакеты движка прикладываются к тому же релизу, что и xkop:
+      # установщику нужен один адрес, а не два.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2.4.0
+        with:
+          files: ./bin/${{ matrix.arch }}/*
+          tag_name: ${{ github.ref_name }}

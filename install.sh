@@ -1,67 +1,67 @@
 #!/bin/sh
-# xkop installer. Runs ON THE ROUTER.
+# Установка xkop. Запускается НА РОУТЕРЕ.
 #
 #   sh <(wget -O - https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh)
 #
-# While the repository is private that URL is not readable anonymously; pass a
-# token instead, or use tools/setup-test-router.sh over ssh from the PC:
+# Ставит пакетами: пакетный менеджер знает версию, умеет обновить и умеет
+# удалить. Обновление потом — одной командой:
 #
-#   GITHUB_TOKEN=... sh install.sh
+#   xkop update
 #
-# What it does: packages xkop needs, the engine, the xkop files themselves.
-# What it does not do yet: a service, a configuration, routing. There is one
-# working command so far - stats - and this script exists to deliver it the
-# same way the finished thing will be delivered.
+# Если релиза ещё нет или под эту архитектуру пакета не собрано, установщик
+# кладёт файлы прямо с ветки. Это путь для разработки: он рабочий, но версии
+# у него нет, только хэш коммита.
 #
-# Settings, all optional:
-#   XKOP_REPO=Jedakaya/xkop    XKOP_REF=main     GITHUB_TOKEN=...
+# Переменные, все необязательные:
+#   XKOP_REPO=Jedakaya/xkop    XKOP_REF=main
+#   XKOP_FROM_BRANCH=1         не смотреть релизы, ставить с ветки
 #   XKOP_NO_ENGINE=1           не трогать движок
-#   XRAY_TARGET=/tmp/xray      движок в RAM, ни байта на флэш
+#   GITHUB_TOKEN=...           если репозиторий закрыт
 
 set -eu
 
 XKOP_REPO=${XKOP_REPO:-Jedakaya/xkop}
 XKOP_REF=${XKOP_REF:-main}
 XKOP_LIB_DIR=/usr/lib/xkop
+PANEL_ROOT=/www-xkop
 WORK=/tmp/xkop-install
 
 say() { echo; echo "== $*"; }
+note() { echo "-- $*"; }
+warn() { echo "!! $*"; }
 die() { echo "!! $*" >&2; exit 1; }
 
-# A fresh OpenWrt has no curl - only wget. Requiring curl before the package
-# manager has run would fail on exactly the router this script exists for.
+# На свежей OpenWrt curl нет, есть только wget. Требовать curl до того, как
+# отработает пакетный менеджер, значит отказать ровно тому роутеру, ради
+# которого этот скрипт и написан.
 download() {
-    # $1 - url, $2 - destination, $3 - optional auth header
     if command -v curl > /dev/null 2>&1; then
         if [ -n "${3:-}" ]; then
-            curl -fsSL --max-time 120 -H "$3" -o "$2" "$1"
+            curl -fsSL --max-time 300 -H "$3" -o "$2" "$1"
         else
-            curl -fsSL --max-time 120 -o "$2" "$1"
+            curl -fsSL --max-time 300 -o "$2" "$1"
         fi
     elif [ -z "${3:-}" ]; then
         wget -q -O "$2" "$1"
     else
-        # Header authentication needs curl; busybox wget cannot do it.
         return 1
     fi
 }
 
-# Adapted from podkop, where it was bought with real failures: when the
-# provider poisons DNS, GitHub stops resolving and every download dies with a
-# reason that names the wrong problem. The musl resolver reads /etc/hosts
-# before DNS, so static records help wget immediately.
+# Перенято у podkop, где куплено настоящими отказами: когда провайдер травит
+# DNS, GitHub перестаёт резолвиться, и любая загрузка падает с причиной,
+# которая называет не ту проблему. Резолвер musl читает /etc/hosts раньше DNS.
 fix_github_dns() {
-    local marker="# xkop: github DNS fallback"
-    local host broken=0
+    marker="# xkop: github DNS fallback"
+    broken=0
 
     grep -qF "$marker" /etc/hosts 2> /dev/null && return 0
-
     for host in raw.githubusercontent.com api.github.com github.com; do
         nslookup "$host" > /dev/null 2>&1 || broken=1
     done
     [ "$broken" -eq 0 ] && return 0
 
-    echo "-- домены GitHub не резолвятся, добавляю записи в /etc/hosts"
+    note "домены GitHub не резолвятся, добавляю записи в /etc/hosts"
     {
         echo "$marker"
         echo "20.205.243.166 github.com"
@@ -81,37 +81,75 @@ fix_github_dns() {
 }
 
 fetch_repo_file() {
-    # $1 - path inside the repository, $2 - destination
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        download "https://api.github.com/repos/$XKOP_REPO/contents/$1?ref=$SHA" "$2" \
-            "Authorization: Bearer $GITHUB_TOKEN" \
-            && return 0
-        # The API needs one more header to answer with the file itself.
         curl -fsSL --max-time 120 \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.raw" \
-            -o "$2" "https://api.github.com/repos/$XKOP_REPO/contents/$1?ref=$SHA"
+            -o "$2" "https://api.github.com/repos/$XKOP_REPO/contents/$1?ref=$SHA" 2> /dev/null
     else
         download "https://raw.githubusercontent.com/$XKOP_REPO/$SHA/$1" "$2"
     fi
 }
 
+pkg_format() {
+    if command -v apk > /dev/null 2>&1; then echo apk; else echo ipk; fi
+}
+
+router_arch() {
+    arch=""
+    [ -r /etc/os-release ] && arch=$(. /etc/os-release 2> /dev/null && echo "${OPENWRT_ARCH:-}")
+    [ -n "$arch" ] || arch=$(uname -m 2> /dev/null)
+    echo "$arch"
+}
+
+# Место проверяется ПОСЛЕ загрузки и ДО установки, по реальному размеру файла.
+# Фиксированный порог сам по себе отказывал роутерам, которым нужен был
+# мегабайт.
+install_package_file() {
+    file="$1"
+    [ -s "$file" ] || return 1
+
+    size_kb=$(( ($(wc -c < "$file") + 1023) / 1024 ))
+    free_kb=$(df -k /overlay 2> /dev/null | awk 'NR==2 {print $4}')
+    [ -n "$free_kb" ] || free_kb=$(df -k / 2> /dev/null | awk 'NR==2 {print $4}')
+
+    if [ -n "$free_kb" ] && [ "$free_kb" -lt "$size_kb" ]; then
+        warn "не хватает места под $(basename "$file"): нужно ${size_kb} КБ, свободно ${free_kb} КБ"
+        return 2
+    fi
+
+    if command -v apk > /dev/null 2>&1; then
+        apk add --allow-untrusted --upgrade "$file" > /dev/null 2>&1
+    else
+        opkg install "$file" > /dev/null 2>&1
+    fi
+}
+
+asset_url() {
+    jq -r --arg p "$1" --arg s "$2" \
+        '[.assets[]? | select((.name | startswith($p)) and (.name | endswith($s)))]
+         | first | .browser_download_url // empty' \
+        "$WORK/release.json" 2> /dev/null
+}
+
+# --- зависимости ----------------------------------------------------------
+
 say "сеть"
 fix_github_dns
 
 say "зависимости"
-packages="curl jq gzip coreutils-base64 unzip"
+packages="curl jq gzip coreutils-base64 unzip nftables kmod-nft-tproxy"
 if command -v apk > /dev/null 2>&1; then
-    echo "-- менеджер: apk"
-    apk update > /dev/null 2>&1 || echo "!! индекс не обновился, ставлю на том, что есть"
+    note "менеджер: apk"
+    apk update > /dev/null 2>&1 || warn "индекс не обновился, ставлю на том, что есть"
     for p in $packages; do
-        apk add --no-interactive "$p" > /dev/null 2>&1 || echo "!! не поставился: $p"
+        apk add --no-interactive "$p" > /dev/null 2>&1 || warn "не поставился: $p"
     done
 elif command -v opkg > /dev/null 2>&1; then
-    echo "-- менеджер: opkg"
-    opkg update > /dev/null 2>&1 || echo "!! индекс не обновился, ставлю на том, что есть"
+    note "менеджер: opkg"
+    opkg update > /dev/null 2>&1 || warn "индекс не обновился, ставлю на том, что есть"
     for p in $packages; do
-        opkg install "$p" > /dev/null 2>&1 || echo "!! не поставился: $p"
+        opkg install "$p" > /dev/null 2>&1 || warn "не поставился: $p"
     done
 else
     die "ни apk, ни opkg не найдены"
@@ -119,131 +157,170 @@ fi
 
 command -v jq > /dev/null 2>&1 || die "без jq команды xkop работать не будут"
 
-say "источник"
-# The branch is resolved to a commit once, and everything is then fetched by
-# that hash. raw.githubusercontent serves a branch from cache and ignores query
-# parameters - an installer pulled by branch name arrives stale, which already
-# happened twice on podkop. A hash is immutable and has no such problem.
 rm -rf "$WORK"
 mkdir -p "$WORK/lib"
 
-SHA="$XKOP_REF"
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-    download "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" "$WORK/head.json" \
-        "Authorization: Bearer $GITHUB_TOKEN" 2> /dev/null || true
-else
-    download "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" "$WORK/head.json" 2> /dev/null || true
-fi
+FORMAT=$(pkg_format)
+ARCH=$(router_arch)
+note "роутер: $ARCH, пакеты $FORMAT"
 
-if [ -s "$WORK/head.json" ]; then
-    resolved=$(jq -r '.sha // empty' "$WORK/head.json" 2> /dev/null || true)
-    [ -n "$resolved" ] && SHA="$resolved"
-fi
+# --- пакетами, если есть релиз --------------------------------------------
 
-if [ "$SHA" = "$XKOP_REF" ]; then
-    echo "-- хэш коммита получить не удалось, беру по имени ветки"
-else
-    echo "-- $XKOP_REPO @ $(echo "$SHA" | cut -c1-7)"
-fi
+INSTALLED_FROM=""
 
-say "файлы xkop"
-# Downloaded to /tmp first and only then installed: a half-finished download
-# must not be able to leave the router with half a command.
-fetch_repo_file "xkop/files/usr/bin/xkop" "$WORK/xkop" || die "не удалось скачать xkop"
+if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
+    say "релиз"
+    if download "https://api.github.com/repos/$XKOP_REPO/releases/latest" "$WORK/release.json" \
+        && [ -s "$WORK/release.json" ]; then
 
-# Список библиотек полный и обязательный: /usr/bin/xkop подключает их все,
-# и недостающая означает не «без одной возможности», а команду, которая
-# не запускается вовсе. Полнота списка проверяется в tests/installer.test.sh.
-XKOP_LIBS="constants.sh logging.sh version.sh stats.sh stats.jq
-subscription.sh subscription.jq config.sh config.jq lists.sh userlists.sh
-nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh service.sh"
+        VERSION=$(jq -r '.tag_name // empty' "$WORK/release.json" 2> /dev/null | sed 's/^v//')
+        XKOP_URL=$(asset_url "xkop-" ".$FORMAT")
+        LUCI_URL=$(asset_url "luci-app-xkop-" ".$FORMAT")
+        ENGINE_URL=$(asset_url "xray-xkop-" "-$ARCH.$FORMAT")
 
-for lib in $XKOP_LIBS; do
-    fetch_repo_file "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" \
-        || die "не удалось скачать $lib"
-done
+        if [ -n "$XKOP_URL" ]; then
+            note "версия $VERSION"
 
-fetch_repo_file "xkop/files/etc/init.d/xkop" "$WORK/init.d-xkop" \
-    || die "не удалось скачать файл службы"
+            # Всё качается в RAM целиком и только потом ставится: отказ
+            # на середине загрузки не должен оставлять роутер с половиной.
+            if [ -n "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
+                if download "$ENGINE_URL" "$WORK/engine.$FORMAT"; then
+                    install_package_file "$WORK/engine.$FORMAT" \
+                        && note "движок установлен пакетом" \
+                        || warn "движок пакетом не встал"
+                fi
+            elif [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
+                warn "пакета движка под $ARCH в релизе нет"
+            fi
 
-mkdir -p "$XKOP_LIB_DIR"
-cp "$WORK"/lib/* "$XKOP_LIB_DIR/"
-cp "$WORK/xkop" /usr/bin/xkop
-cp "$WORK/init.d-xkop" /etc/init.d/xkop
-chmod +x /usr/bin/xkop /etc/init.d/xkop
+            if download "$XKOP_URL" "$WORK/xkop.$FORMAT" && install_package_file "$WORK/xkop.$FORMAT"; then
+                INSTALLED_FROM="release"
+                note "xkop установлен пакетом"
 
-# The package build substitutes the version; an install from the branch stamps
-# the commit, so a router can always say what exactly is running on it.
-sed -i "s/__COMPILED_VERSION_VARIABLE__/$(echo "$SHA" | cut -c1-7)/" "$XKOP_LIB_DIR/constants.sh"
-
-if [ ! -f /etc/config/xkop ]; then
-    fetch_repo_file "xkop/files/etc/config/xkop" "$WORK/config" && cp "$WORK/config" /etc/config/xkop
-    echo "-- /etc/config/xkop создан"
-else
-    echo "-- /etc/config/xkop оставлен как есть"
-fi
-
-if [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
-    say "движок"
-    if fetch_repo_file "tools/install-xray-dev.sh" "$WORK/install-xray.sh"; then
-        sh "$WORK/install-xray.sh" || echo "!! движок не поставился, xkop это переживёт"
+                if [ -n "$LUCI_URL" ] && download "$LUCI_URL" "$WORK/luci.$FORMAT"; then
+                    install_package_file "$WORK/luci.$FORMAT" \
+                        && note "LuCI установлен пакетом" \
+                        || warn "LuCI пакетом не встал"
+                fi
+            else
+                warn "пакет xkop не встал, перехожу на файлы с ветки"
+            fi
+        else
+            note "в релизе нет пакета под $FORMAT, беру файлы с ветки"
+        fi
     else
-        echo "!! скрипт установки движка не скачался"
+        note "релизов ещё нет, беру файлы с ветки"
     fi
 fi
 
-say "панель клиента"
+# --- файлами с ветки, если пакетами не вышло ------------------------------
+
+if [ -z "$INSTALLED_FROM" ]; then
+    say "источник"
+    # Ветка разрешается в хэш один раз, и дальше всё тянется по хэшу.
+    # raw.githubusercontent отдаёт ветку из кэша и параметры запроса
+    # игнорирует — установщик, взятый по имени ветки, приезжает устаревшим,
+    # на чём в podkop дважды обжигались.
+    SHA="$XKOP_REF"
+    download "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" "$WORK/head.json" 2> /dev/null || true
+    if [ -s "$WORK/head.json" ]; then
+        resolved=$(jq -r '.sha // empty' "$WORK/head.json" 2> /dev/null || true)
+        [ -n "$resolved" ] && SHA="$resolved"
+    fi
+    note "$XKOP_REPO @ $(echo "$SHA" | cut -c1-7)"
+
+    say "файлы xkop"
+    fetch_repo_file "xkop/files/usr/bin/xkop" "$WORK/xkop" || die "не удалось скачать xkop"
+
+    # Список полный и обязательный: /usr/bin/xkop подключает библиотеки все,
+    # и недостающая означает не «без одной возможности», а команду, которая
+    # не запускается вовсе. Полнота списка проверяется в tests/installer.test.sh.
+    XKOP_LIBS="constants.sh logging.sh version.sh stats.sh stats.jq
+subscription.sh subscription.jq config.sh config.jq lists.sh userlists.sh
+nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh update.sh
+service.sh"
+
+    for lib in $XKOP_LIBS; do
+        fetch_repo_file "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" \
+            || die "не удалось скачать $lib"
+    done
+
+    fetch_repo_file "xkop/files/etc/init.d/xkop" "$WORK/init.d-xkop" \
+        || die "не удалось скачать файл службы"
+
+    mkdir -p "$XKOP_LIB_DIR"
+    cp "$WORK"/lib/* "$XKOP_LIB_DIR/"
+    cp "$WORK/xkop" /usr/bin/xkop
+    cp "$WORK/init.d-xkop" /etc/init.d/xkop
+    chmod +x /usr/bin/xkop /etc/init.d/xkop
+
+    # У сборки версия подставляется из тега; установка с ветки ставит хэш,
+    # чтобы роутер всегда мог сказать, что именно на нём работает.
+    sed -i "s/__COMPILED_VERSION_VARIABLE__/$(echo "$SHA" | cut -c1-7)/" "$XKOP_LIB_DIR/constants.sh"
+
+    if [ ! -f /etc/config/xkop ]; then
+        fetch_repo_file "xkop/files/etc/config/xkop" "$WORK/config" && cp "$WORK/config" /etc/config/xkop
+        note "/etc/config/xkop создан"
+    else
+        note "/etc/config/xkop оставлен как есть"
+    fi
+
+    if [ "${XKOP_NO_ENGINE:-0}" != "1" ] && ! command -v xray > /dev/null 2>&1; then
+        say "движок"
+        if fetch_repo_file "tools/install-xray-dev.sh" "$WORK/install-xray.sh"; then
+            sh "$WORK/install-xray.sh" || warn "движок не поставился, xkop это переживёт"
+        else
+            warn "скрипт установки движка не скачался"
+        fi
+    fi
+
+    INSTALLED_FROM="branch"
+fi
+
+# --- панель ---------------------------------------------------------------
+
 # Панель — обычные файлы, а не пакет: её отдаёт отдельный экземпляр uhttpd,
-# и обновляется она вместе со скриптами, без тега и пересборки.
-mkdir -p /www-xkop/cgi-bin
+# и обновляется она вместе со скриптами.
+say "панель клиента"
+[ -n "${SHA:-}" ] || SHA="$XKOP_REF"
+mkdir -p "$PANEL_ROOT/cgi-bin"
 if fetch_repo_file "client-panel/index.html" "$WORK/index.html"; then
-    cp "$WORK/index.html" /www-xkop/index.html
+    cp "$WORK/index.html" "$PANEL_ROOT/index.html"
     for endpoint in _common auth status subscription-set subscription-update \
                     routes route-set node-select explain; do
         if fetch_repo_file "client-panel/cgi-bin/$endpoint" "$WORK/$endpoint"; then
-            cp "$WORK/$endpoint" "/www-xkop/cgi-bin/$endpoint"
-            chmod +x "/www-xkop/cgi-bin/$endpoint"
+            cp "$WORK/$endpoint" "$PANEL_ROOT/cgi-bin/$endpoint"
+            chmod +x "$PANEL_ROOT/cgi-bin/$endpoint"
         else
-            echo "!! не скачалась точка панели: $endpoint"
+            warn "не скачалась точка панели: $endpoint"
         fi
     done
-    echo "-- панель в /www-xkop, порт 8090"
+    note "панель в $PANEL_ROOT, порт 8090"
 else
-    echo "!! панель не скачалась, xkop это переживёт"
-fi
-
-say "конфигурация для проверки метрик"
-if fetch_repo_file "tools/xray-stats-test.json" /tmp/xray-stats-test.json; then
-    echo "-- /tmp/xray-stats-test.json"
-else
-    echo "!! не скачалась, проверку метрик придётся настраивать руками"
+    warn "панель не скачалась, xkop это переживёт"
 fi
 
 rm -rf "$WORK"
 
+# --- проверка -------------------------------------------------------------
+
 say "проверка"
-xkop version
+/usr/bin/xkop version
 echo
-echo "-- xkop stats при остановленном движке:"
-xkop stats | head -12
+/usr/bin/xkop check_engine
 
-cat << 'EOF'
+cat << EOF
 
-== дальше
+== установлено ($INSTALLED_FROM)
+
+Дальше — ссылка подписки и запуск:
 
   uci set xkop.main.url='https://ваша-ссылка' && uci commit xkop
   /etc/init.d/xkop enable && /etc/init.d/xkop start
 
   xkop get_status
-  xkop stats
 
-Панель клиента — http://адрес-роутера:8090, вход по паролю роутера.
-Настройки целиком — в LuCI, раздел «Сервисы → xkop».
-
-Проверить движок отдельно, без обвязки:
-
-  xray run -c /tmp/xray-stats-test.json &
-  xkop stats
-
-Остальное — в docs/build.md.
+Панель клиента:  http://\$(адрес роутера):8090
+Настройки целиком: LuCI, «Сервисы → xkop»
+Обновление:      xkop update
 EOF

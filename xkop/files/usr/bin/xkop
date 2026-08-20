@@ -22,6 +22,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/nodes.sh"
 . "$XKOP_LIB_DIR/diagnostics.sh"
 . "$XKOP_LIB_DIR/explain.sh"
+. "$XKOP_LIB_DIR/update.sh"
 . "$XKOP_LIB_DIR/service.sh"
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
@@ -167,6 +168,8 @@ xkop - маршрутизатор трафика на Xray-core
   configure                  собрать конфигурацию движка
   show_engine_config         показать установленную конфигурацию
   start / stop / restart     управление службой
+  check_update               есть ли новая версия
+  update                     обновить пакеты с откатом при неудаче
   version                    версия пакета
   help                       эта справка
 
@@ -233,6 +236,12 @@ main() {
             ;;
         userlists_update)
             userlist_update_all
+            ;;
+        update)
+            update_apply
+            ;;
+        check_update)
+            update_check_json
             ;;
         configure)
             cmd_configure

@@ -57,18 +57,23 @@ find ./bin/raw -name 'xkop*.apk'
   не должен приехать с CRLF — иначе на роутере получится `bad interpreter`.
 - `shellcheck.yml` — разбор изменений shellcheck'ом, только по ошибкам.
 
-## Стенд с нуля
+## Установка на роутер
 
-Одной командой с ПК, по ssh: зависимости, движок, файлы xkop и конфигурация
-для проверки метрик.
+Тем же способом, что и у клиента, — установщиком с GitHub:
 
 ```sh
-tools/setup-test-router.sh root@192.168.0.139
-tools/setup-test-router.sh root@192.168.0.139 --no-engine
+sh <(wget -O - https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh)
 ```
 
-Скрипт повторяемый: его можно гонять после любой правки. `/etc/config/xkop`
-он не трогает.
+Он ставит пакетами, если есть релиз с пакетом под архитектуру роутера,
+и файлами с ветки, если релиза ещё нет. Второй путь честно называется
+в выводе: у него нет версии, только хэш коммита.
+
+Принудительно с ветки, не глядя на релизы:
+
+```sh
+XKOP_FROM_BRANCH=1 sh <(wget -O - https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh)
+```
 
 ## Проверка на роутере без пакета
 
