@@ -62,6 +62,34 @@ check "установщик сбрасывает кэш LuCI" "yes" \
 check "установщик поднимает панель" "yes" \
     "$(grep -q 'listen_http=' "$ROOT/install.sh" && echo yes || echo no)"
 
+# Функция в файле службы обязана быть хуком, который rc.common вызывает.
+#
+# Иначе она просто лежит в файле. У нас так лежала start_service_done: имя
+# похоже на правду, а вызывает rc.common только service_started. Значит
+# проверка «поднялся ли движок», взведение фонового восстановления и возврат
+# закреплённого узла не выполнялись ни разу с того дня, как были написаны.
+#
+# Список взят из самого rc.common OpenWrt.
+hooks='start_service stop_service reload_service restart_service
+service_triggers service_started service_running service_stopped
+boot start stop restart reload shutdown'
+
+wrong=""
+for name in $(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$ROOT/xkop/files/etc/init.d/xkop" | tr -d '()'); do
+    case " $(echo $hooks) " in *" $name "*) continue ;; esac
+    wrong="$wrong $name"
+done
+
+check "в файле службы только настоящие хуки" "" "$wrong"
+
+# Хук после запуска не имеет права ждать.
+#
+# Он выполняется внутри init-скрипта, а проверка «поднялся ли движок» ждёт
+# до двадцати секунд. Держать запуск службы всё это время нельзя: сразу после
+# того как хук впервые заработал, роутер на втором подряд перезапуске ушёл
+# в перезагрузку.
+check "проверка после запуска уходит в фон" "yes"     "$(grep -A 12 '^service_started' "$ROOT/xkop/files/etc/init.d/xkop"         | grep -q 'started_check.*&' && echo yes || echo no)"
+
 # Лимит открытых файлов у движка.
 #
 # Без него procd отдаёт системный умолчальный, на OpenWrt это 1024. Через

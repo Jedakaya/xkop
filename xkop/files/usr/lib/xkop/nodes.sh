@@ -276,6 +276,30 @@ nodes_keep() {
         return 0
     fi
 
+    # Запомненный узел возвращается раньше любых сравнений.
+    #
+    # Сразу после запуска наблюдатель успел измерить не всех: запомненного
+    # среди измеренных может ещё не быть, и тогда сравнение задержек честно
+    # решает, что он «не отвечает», и уходит на первый попавшийся измеренный.
+    # Внешний адрес меняется, speedtest показывает другой сервер, и выглядит
+    # это так, будто память не работает. Она работает — её обгоняет
+    # арифметика, которой нечего сравнивать.
+    #
+    # Поэтому: нет закрепления, есть память, узел в пуле и не признан мёртвым —
+    # возвращаем его и уходим. Сравнение задержек своё возьмёт на следующем
+    # круге, когда замеры будут по всем.
+    if [ -z "$override" ] && [ -n "$mine" ]; then
+        if subscription_pool_all | jq -e --arg tag "$mine"             'any(.[]; .tag == $tag)' > /dev/null 2>&1             && ! printf '%s' "$stats" | jq -e --arg tag "$mine"                 '[.observatory.nodes[]? | select(.tag == $tag and .state == "dead")] | length > 0'                 > /dev/null 2>&1; then
+
+            if nodes_api bo -b "$XKOP_BALANCER_TAG" "$mine" > /dev/null 2>&1; then
+                log_info "возвращаю прежний узел: $mine"
+                jq -nc --arg tag "$mine"                     '{ok: true, result: "kept", selected: $tag,
+                      reason: "восстановлен прежний выбор"}'
+                return 0
+            fi
+        fi
+    fi
+
     best=$(printf '%s' "$alive" | jq -r 'min_by(.delay_ms) | .tag')
     best_delay=$(printf '%s' "$alive" | jq -r 'min_by(.delay_ms) | .delay_ms')
 
