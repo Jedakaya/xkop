@@ -1,7 +1,7 @@
 #!/bin/sh
 # xkop installer. Runs ON THE ROUTER.
 #
-#   wget -qO- https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh | sh
+#   sh <(wget -O - https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh)
 #
 # While the repository is private that URL is not readable anonymously; pass a
 # token instead, or use tools/setup-test-router.sh over ssh from the PC:
@@ -10,8 +10,8 @@
 #
 # What it does: packages xkop needs, the engine, the xkop files themselves.
 # What it does not do yet: a service, a configuration, routing. There is one
-# working command so far - stats - and this script exists to deliver it to a
-# router the same way the finished thing will be delivered.
+# working command so far - stats - and this script exists to deliver it the
+# same way the finished thing will be delivered.
 #
 # Settings, all optional:
 #   XKOP_REPO=Jedakaya/xkop    XKOP_REF=main     GITHUB_TOKEN=...
@@ -28,42 +28,76 @@ WORK=/tmp/xkop-install
 say() { echo; echo "== $*"; }
 die() { echo "!! $*" >&2; exit 1; }
 
-api() {
-    # $1 - path under the repository, $2 - destination file
+# A fresh OpenWrt has no curl - only wget. Requiring curl before the package
+# manager has run would fail on exactly the router this script exists for.
+download() {
+    # $1 - url, $2 - destination, $3 - optional auth header
+    if command -v curl > /dev/null 2>&1; then
+        if [ -n "${3:-}" ]; then
+            curl -fsSL --max-time 120 -H "$3" -o "$2" "$1"
+        else
+            curl -fsSL --max-time 120 -o "$2" "$1"
+        fi
+    elif [ -z "${3:-}" ]; then
+        wget -q -O "$2" "$1"
+    else
+        # Header authentication needs curl; busybox wget cannot do it.
+        return 1
+    fi
+}
+
+# Adapted from podkop, where it was bought with real failures: when the
+# provider poisons DNS, GitHub stops resolving and every download dies with a
+# reason that names the wrong problem. The musl resolver reads /etc/hosts
+# before DNS, so static records help wget immediately.
+fix_github_dns() {
+    local marker="# xkop: github DNS fallback"
+    local host broken=0
+
+    grep -qF "$marker" /etc/hosts 2> /dev/null && return 0
+
+    for host in raw.githubusercontent.com api.github.com github.com; do
+        nslookup "$host" > /dev/null 2>&1 || broken=1
+    done
+    [ "$broken" -eq 0 ] && return 0
+
+    echo "-- домены GitHub не резолвятся, добавляю записи в /etc/hosts"
+    {
+        echo "$marker"
+        echo "20.205.243.166 github.com"
+        echo "20.205.243.168 api.github.com"
+        echo "20.205.243.165 codeload.github.com"
+        echo "185.199.108.133 raw.githubusercontent.com"
+        echo "185.199.109.133 raw.githubusercontent.com"
+        echo "185.199.110.133 raw.githubusercontent.com"
+        echo "185.199.111.133 raw.githubusercontent.com"
+        echo "185.199.108.133 objects.githubusercontent.com"
+        echo "185.199.109.133 objects.githubusercontent.com"
+        echo "185.199.108.133 release-assets.githubusercontent.com"
+        echo "185.199.109.133 release-assets.githubusercontent.com"
+    } >> /etc/hosts
+
+    /etc/init.d/dnsmasq restart > /dev/null 2>&1 || true
+}
+
+fetch_repo_file() {
+    # $1 - path inside the repository, $2 - destination
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL --max-time 60 \
+        download "https://api.github.com/repos/$XKOP_REPO/contents/$1?ref=$SHA" "$2" \
+            "Authorization: Bearer $GITHUB_TOKEN" \
+            && return 0
+        # The API needs one more header to answer with the file itself.
+        curl -fsSL --max-time 120 \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.raw" \
             -o "$2" "https://api.github.com/repos/$XKOP_REPO/contents/$1?ref=$SHA"
     else
-        curl -fsSL --max-time 60 \
-            -o "$2" "https://raw.githubusercontent.com/$XKOP_REPO/$SHA/$1"
+        download "https://raw.githubusercontent.com/$XKOP_REPO/$SHA/$1" "$2"
     fi
 }
 
-command -v curl > /dev/null 2>&1 || die "нужен curl"
-
-say "источник"
-# The branch is resolved to a commit once, and everything is then fetched by
-# that hash. raw.githubusercontent serves a branch from cache and ignores query
-# parameters - an installer pulled by branch name arrives stale, which already
-# happened twice on podkop. A hash is immutable and has no such problem.
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-    SHA=$(curl -fsSL --max-time 30 -H "Authorization: Bearer $GITHUB_TOKEN" \
-        "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" 2> /dev/null \
-        | sed -n 's/^  "sha": "\(.*\)",$/\1/p' | head -n 1)
-else
-    SHA=$(curl -fsSL --max-time 30 \
-        "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" 2> /dev/null \
-        | sed -n 's/^  "sha": "\(.*\)",$/\1/p' | head -n 1)
-fi
-
-if [ -z "$SHA" ]; then
-    echo "-- хэш коммита получить не удалось, беру по имени ветки"
-    SHA="$XKOP_REF"
-else
-    echo "-- $XKOP_REPO @ $(echo "$SHA" | cut -c1-7)"
-fi
+say "сеть"
+fix_github_dns
 
 say "зависимости"
 packages="curl jq gzip coreutils-base64 unzip"
@@ -85,15 +119,39 @@ fi
 
 command -v jq > /dev/null 2>&1 || die "без jq команды xkop работать не будут"
 
+say "источник"
+# The branch is resolved to a commit once, and everything is then fetched by
+# that hash. raw.githubusercontent serves a branch from cache and ignores query
+# parameters - an installer pulled by branch name arrives stale, which already
+# happened twice on podkop. A hash is immutable and has no such problem.
 rm -rf "$WORK"
 mkdir -p "$WORK/lib"
+
+SHA="$XKOP_REF"
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+    download "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" "$WORK/head.json" \
+        "Authorization: Bearer $GITHUB_TOKEN" 2> /dev/null || true
+else
+    download "https://api.github.com/repos/$XKOP_REPO/commits/$XKOP_REF" "$WORK/head.json" 2> /dev/null || true
+fi
+
+if [ -s "$WORK/head.json" ]; then
+    resolved=$(jq -r '.sha // empty' "$WORK/head.json" 2> /dev/null || true)
+    [ -n "$resolved" ] && SHA="$resolved"
+fi
+
+if [ "$SHA" = "$XKOP_REF" ]; then
+    echo "-- хэш коммита получить не удалось, беру по имени ветки"
+else
+    echo "-- $XKOP_REPO @ $(echo "$SHA" | cut -c1-7)"
+fi
 
 say "файлы xkop"
 # Downloaded to /tmp first and only then installed: a half-finished download
 # must not be able to leave the router with half a command.
-api "xkop/files/usr/bin/xkop" "$WORK/xkop" || die "не удалось скачать xkop"
+fetch_repo_file "xkop/files/usr/bin/xkop" "$WORK/xkop" || die "не удалось скачать xkop"
 for lib in constants.sh stats.sh stats.jq subscription.sh subscription.jq version.sh; do
-    api "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" || die "не удалось скачать $lib"
+    fetch_repo_file "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" || die "не удалось скачать $lib"
 done
 
 mkdir -p "$XKOP_LIB_DIR"
@@ -106,7 +164,7 @@ chmod +x /usr/bin/xkop
 sed -i "s/__COMPILED_VERSION_VARIABLE__/$(echo "$SHA" | cut -c1-7)/" "$XKOP_LIB_DIR/constants.sh"
 
 if [ ! -f /etc/config/xkop ]; then
-    api "xkop/files/etc/config/xkop" "$WORK/config" && cp "$WORK/config" /etc/config/xkop
+    fetch_repo_file "xkop/files/etc/config/xkop" "$WORK/config" && cp "$WORK/config" /etc/config/xkop
     echo "-- /etc/config/xkop создан"
 else
     echo "-- /etc/config/xkop оставлен как есть"
@@ -114,7 +172,7 @@ fi
 
 if [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
     say "движок"
-    if api "tools/install-xray-dev.sh" "$WORK/install-xray.sh"; then
+    if fetch_repo_file "tools/install-xray-dev.sh" "$WORK/install-xray.sh"; then
         sh "$WORK/install-xray.sh" || echo "!! движок не поставился, xkop это переживёт"
     else
         echo "!! скрипт установки движка не скачался"
@@ -122,9 +180,11 @@ if [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
 fi
 
 say "конфигурация для проверки метрик"
-api "tools/xray-stats-test.json" /tmp/xray-stats-test.json \
-    && echo "-- /tmp/xray-stats-test.json" \
-    || echo "!! не скачалась, проверку метрик придётся настраивать руками"
+if fetch_repo_file "tools/xray-stats-test.json" /tmp/xray-stats-test.json; then
+    echo "-- /tmp/xray-stats-test.json"
+else
+    echo "!! не скачалась, проверку метрик придётся настраивать руками"
+fi
 
 rm -rf "$WORK"
 
@@ -134,7 +194,7 @@ echo
 echo "-- xkop stats при остановленном движке:"
 xkop stats | head -12
 
-cat <<'EOF'
+cat << 'EOF'
 
 == дальше
 
