@@ -1,0 +1,31 @@
+{
+  "log": {"loglevel": "warning"},
+  "outbounds": [
+    {
+      "tag": "NL-Amsterdam-2",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "nl2.example.com",
+            "port": 443,
+            "users": [{"id": "8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90", "encryption": "none"}]
+          }
+        ]
+      },
+      "streamSettings": {"network": "tcp", "security": "tls"}
+    },
+    {
+      "tag": "SE-Stockholm-1",
+      "protocol": "shadowsocks",
+      "settings": {
+        "servers": [
+          {"address": "se1.example.com", "port": 8388, "method": "aes-256-gcm", "password": "ss-pass"}
+        ]
+      }
+    },
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "block", "protocol": "blackhole"},
+    {"tag": "dns-out", "protocol": "dns"}
+  ]
+}

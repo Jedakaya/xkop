@@ -1,0 +1,7 @@
+.idea
+node_modules/
+dist/
+bin/
+*.log
+.DS_Store
+CLAUDE.local.md

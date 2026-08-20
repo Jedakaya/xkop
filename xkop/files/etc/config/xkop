@@ -1,0 +1,31 @@
+config settings 'settings'
+	option dns_type 'doh'
+	option dns_server '8.8.8.8/dns-query'
+	option dns_bootstrap '77.88.8.8'
+	option dns_rewrite_ttl '60'
+	option dns_parallel '0'
+	#list dns_extra_server 'dot:1.1.1.1'
+	option canary_enabled '1'
+	option canary_interval '2m'
+	#list canary_learned_ip '46.191.166.9'
+	option dns_failover '1'
+	option dns_failover_on_local '0'
+	option block_client_doh '0'
+	list source_interface 'br-lan'
+	option output_interface ''
+	#list excluded_source_ip '192.168.1.3'
+	option lists_update_interval '1d'
+	option log_level 'warn'
+	option metrics_port '11111'
+	option dont_touch_dhcp '0'
+	option exclude_ntp '0'
+	option disable_quic '0'
+
+# The direct and blocked channels always exist - bindings refer to them and
+# they are not removable. Every other channel, subscription, profile and
+# binding is created by the user, see docs/uci-schema.md for examples.
+config channel 'direct'
+	option type 'direct'
+
+config channel 'blocked'
+	option type 'block'

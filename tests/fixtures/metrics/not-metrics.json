@@ -1,0 +1,4 @@
+{
+  "cmdline": ["/usr/sbin/uhttpd", "-f"],
+  "memstats": {"Alloc": 1024}
+}

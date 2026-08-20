@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error": "metrics_no_stats",
+  "detail": {
+    "address": "127.0.0.1:11111",
+    "http_code": 200,
+    "curl_exit": 0
+  },
+  "source": {
+    "address": "127.0.0.1:11111",
+    "collected_at": 1755600000
+  },
+  "traffic": null,
+  "distribution": null,
+  "observatory": null
+}

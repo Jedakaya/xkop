@@ -1,0 +1,21 @@
+# Build of the ipk package on the OpenWrt 24.10 SDK.
+#
+# This is the branch the client fleet runs on, and the one where podkop kept
+# finding bugs invisible on apk. It is built every time, not on demand.
+FROM openwrt/sdk:x86-64-24.10.8
+
+ARG XKOP_VERSION
+ENV XKOP_VERSION=${XKOP_VERSION}
+
+WORKDIR /builder
+
+RUN [ -x ./setup.sh ] && ./setup.sh || true
+
+RUN ./scripts/feeds update -a \
+    && ./scripts/feeds install curl jq gzip coreutils-base64 \
+    && mkdir -p /builder/package/feeds/utilities/
+
+COPY ./xkop /builder/package/feeds/utilities/xkop
+
+RUN make defconfig \
+    && make package/xkop/compile -j1 V=s

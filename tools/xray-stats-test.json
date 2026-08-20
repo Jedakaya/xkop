@@ -1,0 +1,44 @@
+{
+  "log": {"loglevel": "warning"},
+
+  "stats": {},
+
+  "metrics": {
+    "tag": "metrics-out",
+    "listen": "127.0.0.1:11111"
+  },
+
+  "policy": {
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
+
+  "burstObservatory": {
+    "subjectSelector": ["direct"],
+    "pingConfig": {
+      "destination": "https://connectivitycheck.gstatic.com/generate_204",
+      "interval": "30s",
+      "timeout": "5s",
+      "sampling": 3
+    }
+  },
+
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {"udp": true}
+    }
+  ],
+
+  "outbounds": [
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "block", "protocol": "blackhole"}
+  ]
+}

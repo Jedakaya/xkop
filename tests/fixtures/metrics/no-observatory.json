@@ -1,0 +1,12 @@
+{
+  "cmdline": ["/usr/bin/xray", "run", "-c", "/etc/xkop/config.json"],
+  "observatory": null,
+  "stats": {
+    "inbound": {},
+    "outbound": {
+      "direct": {"uplink": 0, "downlink": 0},
+      "block": {"uplink": 0, "downlink": 0}
+    },
+    "user": {}
+  }
+}

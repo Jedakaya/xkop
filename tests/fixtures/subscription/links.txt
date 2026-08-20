@@ -1,0 +1,14 @@
+vless://8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90@nl2.example.com:443?type=ws&security=tls&path=%2Fws&host=nl2.example.com&ed=2048&sni=nl2.example.com#NL-Amsterdam-2
+vless://8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90@ru0.example.com:443?type=ws&security=tls#%D0%9D%D0%B8%D0%B4%D0%B5%D1%80%D0%BB%D0%B0%D0%BD%D0%B4%D1%8B
+vless://8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90@rw.example.com:443?type=ws&security=reality&pbk=sZ9m0Zp2Qk3xWv1nB7cA5dE8fG2hJ4kL6mN8pQ0rS2t#Reality-over-ws
+vless://8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90@h2.example.com:443?type=h2&security=tls#legacy-h2
+vless://1c2d3e4f-5678-49ab-8cde-f01234567890@xh.example.com:443?type=xhttp&security=tls&path=%2Fxh&mode=auto&sni=xh.example.com#XHTTP-1
+vless://1c2d3e4f-5678-49ab-8cde-f01234567890@gr.example.com:443?type=grpc&security=tls&serviceName=TunSvc&mode=multi#GRPC-1
+vless://1c2d3e4f-5678-49ab-8cde-f01234567890@[2001:db8::1]:443?security=tls&sni=v6.example.com#IPv6-1
+vmess://eyJhZGQiOiJ2bS5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMifQ==
+socks4://old.example.com:1080#Socks4
+socks5://user:pass@sk.example.com:1080#Socks5
+hysteria2://s3cr3t-pass@fi3.example.com:9443?sni=fi3.example.com&obfs=salamander&obfs-password=obfsp&fp=chrome#FI-Helsinki-3
+ss://YWVzLTI1Ni1nY206c3MtcGFzc0BzZTEuZXhhbXBsZS5jb206ODM4OA==#SE-Stockholm-legacy
+trojan://s3cr3t-pass@noport.example.com?security=tls#NoPort
+это не ссылка, а строка мусора

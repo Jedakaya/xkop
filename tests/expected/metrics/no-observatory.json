@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "error": null,
+  "detail": null,
+  "source": {
+    "address": "127.0.0.1:11111",
+    "collected_at": 1755600000
+  },
+  "traffic": {
+    "outbound": {
+      "direct": {
+        "uplink": 0,
+        "downlink": 0,
+        "total": 0
+      },
+      "block": {
+        "uplink": 0,
+        "downlink": 0,
+        "total": 0
+      }
+    },
+    "inbound": {},
+    "outbound_total": {
+      "uplink": 0,
+      "downlink": 0,
+      "total": 0
+    }
+  },
+  "distribution": {
+    "direct": {
+      "bytes": 0,
+      "share": 0
+    },
+    "proxy": {
+      "bytes": 0,
+      "share": 0
+    },
+    "blocked": {
+      "bytes": 0,
+      "share": 0
+    },
+    "service": {
+      "bytes": 0,
+      "share": 0
+    }
+  },
+  "observatory": {
+    "state": "disabled",
+    "nodes": []
+  }
+}

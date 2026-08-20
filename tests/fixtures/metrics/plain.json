@@ -1,0 +1,27 @@
+{
+  "cmdline": ["/usr/bin/xray", "run", "-c", "/etc/xkop/config.json"],
+  "observatory": {
+    "NL-Amsterdam-2": {
+      "alive": true,
+      "delay": 42,
+      "outbound_tag": "NL-Amsterdam-2",
+      "last_seen_time": 1755600120,
+      "last_try_time": 1755600120
+    },
+    "DE-Frankfurt-1": {
+      "delay": 99999999,
+      "last_error_reason": "dial tcp: i/o timeout",
+      "outbound_tag": "DE-Frankfurt-1",
+      "last_try_time": 1755600118
+    }
+  },
+  "stats": {
+    "inbound": {},
+    "outbound": {
+      "direct": {"uplink": 100, "downlink": 900},
+      "NL-Amsterdam-2": {"uplink": 50, "downlink": 450},
+      "DE-Frankfurt-1": {}
+    },
+    "user": {}
+  }
+}

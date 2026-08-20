@@ -1,0 +1,44 @@
+{
+  "cmdline": ["/usr/bin/xray", "run", "-c", "/etc/xkop/config.json"],
+  "memstats": {"Alloc": 8388608, "Sys": 25165824, "NumGC": 12},
+  "observatory": {
+    "NL-Amsterdam-2": {
+      "alive": true,
+      "delay": 45,
+      "outbound_tag": "NL-Amsterdam-2",
+      "health_ping": {
+        "all": 10,
+        "fail": 1,
+        "deviation": 12345678,
+        "average": 45231000,
+        "max": 80500000,
+        "min": 30100000
+      }
+    },
+    "DE-Frankfurt-1": {
+      "outbound_tag": "DE-Frankfurt-1",
+      "health_ping": {
+        "all": 6,
+        "fail": 6
+      }
+    },
+    "SE-Stockholm-1": {
+      "outbound_tag": "SE-Stockholm-1",
+      "health_ping": {}
+    }
+  },
+  "stats": {
+    "inbound": {
+      "tproxy-in": {"uplink": 1505500000, "downlink": 12103500000},
+      "dns-in": {"uplink": 1500000, "downlink": 3500000}
+    },
+    "outbound": {
+      "direct": {"uplink": 1200000000, "downlink": 9800000000},
+      "block": {"uplink": 4000000, "downlink": 200000000},
+      "dns-out": {"uplink": 1500000, "downlink": 3500000},
+      "NL-Amsterdam-2": {"uplink": 300000000, "downlink": 2100000000},
+      "FI-Helsinki-3": {"uplink": 1000000, "downlink": 2000000}
+    },
+    "user": {}
+  }
+}

@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - 'rc/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5.0.0
+
+      - name: Show jq version
+        run: jq --version
+
+      # The jq OpenWrt installs by default is built without oniguruma, so
+      # test/match/gsub/capture do not exist on a router. A program using them
+      # passes here and dies there, which is why this is checked and not just
+      # remembered.
+      - name: No regular expressions in jq programs
+        run: |
+          if grep -nE '(^|[^a-zA-Z_])(test|match|capture|scan|splits|sub|gsub)\(' \
+              xkop/files/usr/lib/xkop/*.jq; then
+            echo "jq в OpenWrt собран без oniguruma: эти функции на роутере не существуют"
+            exit 1
+          fi
+
+      - name: Shell syntax
+        run: |
+          for f in xkop/files/usr/bin/xkop xkop/files/usr/lib/xkop/*.sh tests/*.sh; do
+            sh -n "$f"
+          done
+
+      # A stray carriage return turns a shell script into "bad interpreter" on
+      # the router, and the repository is edited from Windows.
+      - name: No CRLF in shipped files
+        run: |
+          if grep -rlU $'\r' xkop/ tests/ | grep -v '^$'; then
+            echo "найдены файлы с CRLF"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: sh tests/run.sh

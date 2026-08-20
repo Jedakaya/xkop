@@ -1,0 +1,138 @@
+{
+  "ok": true,
+  "error": null,
+  "detail": null,
+  "source": {
+    "address": "127.0.0.1:11111",
+    "collected_at": 1755600000
+  },
+  "traffic": {
+    "outbound": {
+      "direct": {
+        "uplink": 1200000000,
+        "downlink": 9800000000,
+        "total": 11000000000
+      },
+      "block": {
+        "uplink": 4000000,
+        "downlink": 200000000,
+        "total": 204000000
+      },
+      "dns-out": {
+        "uplink": 1500000,
+        "downlink": 3500000,
+        "total": 5000000
+      },
+      "NL-Amsterdam-2": {
+        "uplink": 300000000,
+        "downlink": 2100000000,
+        "total": 2400000000
+      },
+      "FI-Helsinki-3": {
+        "uplink": 1000000,
+        "downlink": 2000000,
+        "total": 3000000
+      }
+    },
+    "inbound": {
+      "tproxy-in": {
+        "uplink": 1505500000,
+        "downlink": 12103500000,
+        "total": 13609000000
+      },
+      "dns-in": {
+        "uplink": 1500000,
+        "downlink": 3500000,
+        "total": 5000000
+      }
+    },
+    "outbound_total": {
+      "uplink": 1506500000,
+      "downlink": 12105500000,
+      "total": 13612000000
+    }
+  },
+  "distribution": {
+    "direct": {
+      "bytes": 11000000000,
+      "share": 0.8081
+    },
+    "proxy": {
+      "bytes": 2403000000,
+      "share": 0.1765
+    },
+    "blocked": {
+      "bytes": 204000000,
+      "share": 0.015
+    },
+    "service": {
+      "bytes": 5000000,
+      "share": 0.0004
+    }
+  },
+  "observatory": {
+    "state": "active",
+    "nodes": [
+      {
+        "tag": "DE-Frankfurt-1",
+        "state": "dead",
+        "delay_ms": null,
+        "probes": 6,
+        "failures": 6,
+        "average_ms": null,
+        "min_ms": null,
+        "max_ms": null,
+        "deviation_ms": null,
+        "last_seen": null,
+        "last_try": null,
+        "last_error": null,
+        "source": "health_ping"
+      },
+      {
+        "tag": "FI-Helsinki-3",
+        "state": "unobserved",
+        "delay_ms": null,
+        "probes": null,
+        "failures": null,
+        "average_ms": null,
+        "min_ms": null,
+        "max_ms": null,
+        "deviation_ms": null,
+        "last_seen": null,
+        "last_try": null,
+        "last_error": null,
+        "source": null
+      },
+      {
+        "tag": "NL-Amsterdam-2",
+        "state": "alive",
+        "delay_ms": 45,
+        "probes": 10,
+        "failures": 1,
+        "average_ms": 45.2,
+        "min_ms": 30.1,
+        "max_ms": 80.5,
+        "deviation_ms": 12.3,
+        "last_seen": null,
+        "last_try": null,
+        "last_error": null,
+        "source": "health_ping"
+      },
+      {
+        "tag": "SE-Stockholm-1",
+        "state": "pending",
+        "delay_ms": null,
+        "probes": 0,
+        "failures": 0,
+        "average_ms": null,
+        "min_ms": null,
+        "max_ms": null,
+        "deviation_ms": null,
+        "last_seen": null,
+        "last_try": null,
+        "last_error": null,
+        "source": "health_ping"
+      }
+    ]
+  }
+}
