@@ -286,7 +286,14 @@ function renderPool(nodes, refresh) {
   }
 
   head.push(line(_("выбран сейчас"), nodes.selected || _("не выбран"),
-    nodes.selection === "manual" ? _("закреплён вручную") : _("автоматически, по задержке")));
+    nodes.selection === "manual" ? _("закреплён вручную") : _("держится автоматически")));
+
+  // Правило выбора говорится вслух. Иначе смена узла выглядит произволом,
+  // а несмена — поломкой.
+  if (nodes.selection !== "manual") {
+    head.push(E("div", { class: "xkop-note" },
+      _("Узел не меняется, пока жив и не проигрывает лучшему больше допуска. Допуск и порог задержки — во вкладке «Система».")));
+  }
 
   if (!list.length) {
     head.push(E("div", { class: "xkop-note" },
@@ -610,7 +617,7 @@ return L.Class.extend({
       root.appendChild(renderExplain());
 
       paint(data);
-      poll.add(refresh, 15);
+      poll.add(refresh, 30);
       return root;
     });
   },

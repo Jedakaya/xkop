@@ -132,3 +132,127 @@ nodes_select() {
         *) jq -nc --arg tag "$tag" '{ok: false, error: "override_failed", detail: {tag: $tag}}' ;;
     esac
 }
+
+# Удержание выбранного узла.
+#
+# Ни одна стратегия движка не помнит предыдущий выбор: и leastPing,
+# и leastLoad каждый раз считают заново, поэтому два узла с близкой задержкой
+# меняются местами от шума измерения. В sing-box это лечится полем tolerance
+# у urltest - «не переключайся, если выигрыш меньше стольких-то миллисекунд»,
+# - и подтверждено на клиентах podkop. У Xray такого поля нет ни в одной
+# стратегии, проверено на самом движке.
+#
+# Поэтому удержание делаем сами, поверх того же закрепления, которым узел
+# закрепляет человек. Правило ровно одно и объяснимое: держимся текущего, пока
+# он жив и не проигрывает лучшему больше допуска. Умер или стал заметно хуже -
+# переходим, и в журнале сказано, почему.
+#
+# Закрепление, сделанное человеком, не трогается никогда. Отличаем своё от
+# чужого по метке: в ней записан тег, который закрепили мы.
+XKOP_AUTOPIN_MARKER_NAME='autopin'
+
+nodes_autopin_marker() {
+    printf '%s/%s' "$XKOP_RUN_DIR" "$XKOP_AUTOPIN_MARKER_NAME"
+}
+
+nodes_switch_tolerance() {
+    local value
+    value=$(config_uci_get settings switch_tolerance_ms 2> /dev/null)
+    case "$value" in
+        '' | *[!0-9]*) value=200 ;;
+    esac
+    printf '%s' "$value"
+}
+
+nodes_max_delay() {
+    local value
+    value=$(config_uci_get settings max_delay_ms 2> /dev/null)
+    case "$value" in
+        '' | *[!0-9]*) value=0 ;;
+    esac
+    printf '%s' "$value"
+}
+
+nodes_keep() {
+    local selection override current marker mine tolerance max_delay
+    local stats alive best best_delay current_delay reason=""
+
+    selection=$(nodes_selection_json)
+    if [ "$(printf '%s' "$selection" | jq -r '.ok')" != "true" ]; then
+        printf '%s' "$selection"
+        return 0
+    fi
+
+    override=$(printf '%s' "$selection" | jq -r '.override // ""')
+    marker=$(nodes_autopin_marker)
+    mine=$(cat "$marker" 2> /dev/null)
+
+    # Чужое закрепление - решение человека, и оно не обсуждается.
+    if [ -n "$override" ] && [ "$override" != "$mine" ]; then
+        jq -nc --arg tag "$override" \
+            '{ok: true, result: "manual", selected: $tag,
+              reason: "закреплено вручную, автоматика не вмешивается"}'
+        return 0
+    fi
+
+    stats=$(cmd_stats 2> /dev/null)
+    alive=$(printf '%s' "$stats" \
+        | jq -c '[.observatory.nodes[]? | select(.state == "alive" and .delay_ms != null)]' 2> /dev/null)
+    [ -n "$alive" ] || alive='[]'
+
+    if [ "$(printf '%s' "$alive" | jq 'length')" = "0" ]; then
+        jq -nc '{ok: true, result: "no_data",
+                 reason: "живых узлов с измеренной задержкой нет, выбор не трогаем"}'
+        return 0
+    fi
+
+    best=$(printf '%s' "$alive" | jq -r 'min_by(.delay_ms) | .tag')
+    best_delay=$(printf '%s' "$alive" | jq -r 'min_by(.delay_ms) | .delay_ms')
+
+    current="$override"
+    [ -n "$current" ] || current=$(printf '%s' "$selection" | jq -r '.selected // ""')
+
+    current_delay=$(printf '%s' "$alive" | jq -r --arg tag "$current" \
+        '(map(select(.tag == $tag)) | first | .delay_ms) // empty')
+
+    tolerance=$(nodes_switch_tolerance)
+    max_delay=$(nodes_max_delay)
+
+    if [ -z "$current" ] || [ -z "$current_delay" ]; then
+        reason="текущий узел не отвечает"
+    elif [ "$max_delay" -gt 0 ] && [ "${current_delay%.*}" -gt "$max_delay" ]; then
+        reason="задержка ${current_delay} мс выше порога ${max_delay} мс"
+    elif [ "$((${current_delay%.*} - ${best_delay%.*}))" -gt "$tolerance" ]; then
+        reason="проигрывает лучшему $((${current_delay%.*} - ${best_delay%.*})) мс при допуске ${tolerance} мс"
+    fi
+
+    if [ -z "$reason" ]; then
+        # Держимся текущего. Закрепляем его, если ещё не закреплён: иначе
+        # балансировщик продолжит выбирать заново на каждом соединении.
+        if [ -z "$override" ]; then
+            nodes_api bo -b "$XKOP_BALANCER_TAG" "$current" > /dev/null 2>&1 \
+                && printf '%s' "$current" > "$marker"
+        fi
+        jq -nc --arg tag "$current" --argjson delay "${current_delay:-0}" \
+            '{ok: true, result: "kept", selected: $tag, delay_ms: $delay}'
+        return 0
+    fi
+
+    if [ "$best" = "$current" ]; then
+        jq -nc --arg tag "$current" --arg reason "$reason" \
+            '{ok: true, result: "kept", selected: $tag,
+              reason: ("лучше некуда: " + $reason)}'
+        return 0
+    fi
+
+    if nodes_api bo -b "$XKOP_BALANCER_TAG" "$best" > /dev/null 2>&1; then
+        printf '%s' "$best" > "$marker"
+        log_info "узел сменён на $best: $reason"
+        jq -nc --arg tag "$best" --arg from "$current" --arg reason "$reason" \
+            --argjson delay "${best_delay:-0}" \
+            '{ok: true, result: "switched", selected: $tag, previous: $from,
+              delay_ms: $delay, reason: $reason}'
+    else
+        jq -nc --arg tag "$best" '{ok: false, error: "override_failed", detail: {tag: $tag}}'
+    fi
+}

@@ -1,6 +1,22 @@
 "use strict";
 "require form";
 "require uci";
+"require ui";
+
+// Региональные списки взаимно исключают друг друга, а «Россия, внутренние»
+// уже содержит часть сервисов. Имена сверены с самим geosite.dat из релиза
+// allow-domains, а не переписаны из podkop: там они через подчёркивание,
+// у нас - через дефис, и опечатка здесь означала бы категорию, которой
+// в файле нет, то есть молча не работающий профиль.
+const REGIONAL = ["russia-inside", "russia-outside", "ukraine-inside"];
+
+// Что не входит в «Россия, внутренние» и потому может стоять рядом.
+const WITH_RUSSIA_INSIDE = [
+  "russia-inside",
+  "meta", "twitter", "discord", "telegram",
+  "google-ai", "google-play", "google-meet",
+  "hetzner", "ovh", "digitalocean", "hodca", "roblox",
+];
 "require network";
 
 // Настройки.
@@ -117,6 +133,50 @@ function profiles(map) {
     o.value(pair[0], pair[1]);
   });
   o.optional = true;
+
+  // Списки пересекаются, и выбранные вместе они не складываются, а двоятся.
+  //
+  // Правило перенято из podkop, где оно куплено разбором настоящих списков:
+  // региональный список ровно один - «внутренние» уже содержат в себе YouTube
+  // и прочие сервисы, и добавление их рядом создаёт вторую запись про то же
+  // самое. Двойные записи не ломают маршрутизацию заметно, поэтому находятся
+  // они поздно и не там, где искали.
+  o.onchange = function (ev, section_id, value) {
+    if (this._busy) return;
+    this._busy = true;
+
+    try {
+      const chosen = Array.isArray(value) ? value.slice() : [value];
+      let kept = chosen.slice();
+      const notes = [];
+
+      const regional = kept.filter(function (v) { return REGIONAL.indexOf(v) >= 0; });
+      if (regional.length > 1) {
+        const last = regional[regional.length - 1];
+        kept = kept.filter(function (v) {
+          return v === last || REGIONAL.indexOf(v) < 0;
+        });
+        notes.push(_("Региональный список может быть только один: оставлен ") + last);
+      }
+
+      if (kept.indexOf("russia-inside") >= 0) {
+        const extra = kept.filter(function (v) { return WITH_RUSSIA_INSIDE.indexOf(v) < 0; });
+        if (extra.length > 0) {
+          kept = kept.filter(function (v) { return WITH_RUSSIA_INSIDE.indexOf(v) >= 0; });
+          notes.push(_("Уже входит в «Россия, внутренние», убрано: ") + extra.join(", "));
+        }
+      }
+
+      if (JSON.stringify(kept) !== JSON.stringify(chosen)) {
+        this.getUIElement(section_id).setValue(kept);
+      }
+      notes.forEach(function (text) {
+        ui.addNotification(null, E("p", {}, text), "warning");
+      });
+    } finally {
+      this._busy = false;
+    }
+  };
 
   o = s.option(form.DynamicList, "domain", _("Свои домены"));
   o.optional = true;
@@ -286,6 +346,19 @@ function system(map) {
   o = s.option(form.DynamicList, "excluded_source_ip", _("Исключённые адреса"),
     _("Эти источники не маршрутизируются вовсе."));
   o.optional = true;
+
+  // Правило перехода между узлами. Без допуска выбор скачет от шума
+  // измерения: два узла с близкой задержкой меняются местами на каждой
+  // проверке, и соединения рвутся на ровном месте.
+  o = s.option(form.Value, "switch_tolerance_ms", _("Допуск при смене узла, мс"),
+    _("Насколько лучше должен быть другой узел, чтобы на него перешли. Меньше допуска — остаёмся на текущем."));
+  o.datatype = "uinteger";
+  o.default = "200";
+
+  o = s.option(form.Value, "max_delay_ms", _("Порог задержки, мс"),
+    _("Выше этого узел меняют, даже если он лучший из живых. 0 — не смотреть на это вовсе."));
+  o.datatype = "uinteger";
+  o.default = "0";
 
   o = s.option(form.Flag, "access_log", _("Журнал доступа"),
     _("Строка на соединение с выбранным исходящим. На нём держится разбор маршрута."));

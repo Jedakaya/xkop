@@ -203,6 +203,7 @@ main() {
             ;;
         lists_update)
             lists_update
+            lists_subnets_update
             jq -nc \
                 --argjson present "$(lists_present && echo true || echo false)" \
                 --arg path "$(lists_geosite_path)" \
@@ -224,7 +225,13 @@ main() {
             nodes_json
             ;;
         select)
+            # Ручное закрепление снимает метку автоматики: дальше решение
+            # принадлежит человеку, и удержание в него не вмешивается.
+            rm -f "$XKOP_RUN_DIR/autopin" 2> /dev/null
             nodes_select "${1:-auto}"
+            ;;
+        keep)
+            nodes_keep
             ;;
         canary)
             # Если выученное изменилось, движок держит конфигурацию, которая

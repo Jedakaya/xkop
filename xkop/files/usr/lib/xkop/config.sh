@@ -75,10 +75,23 @@ config_settings_json() {
             access_log_path: $access_log_path,
             tproxy_address: $tproxy_address,
             tproxy_port: (($tproxy_port | tonumber?) // 1608),
-            strategy: (if $strategy == "" then "leastPing" else $strategy end),
+            strategy: (if $strategy == "" then "leastLoad" else $strategy end),
             probe_url: (if $probe_url == "" then null else $probe_url end),
             probe_interval: (if $probe_interval == "" then null else $probe_interval end)
         }'
+}
+
+# Подсети категорий, выбранных в профиле. Домены категории движок берёт сам
+# из geosite, а адреса лежат отдельным файлом и попадают в то же правило —
+# см. lists.sh, там же сказано, почему без этого Telegram не маршрутизируется.
+config_community_subnets_json() {
+    local id="$1" category
+
+    {
+        for category in $(subscription_config_list "$id" community_list 2> /dev/null); do
+            lists_subnet_entries "$category"
+        done
+    } | jq -R -s -c 'split("\n") | map(select(. != "")) | unique'
 }
 
 config_profile_json() {
@@ -88,6 +101,7 @@ config_profile_json() {
         --arg id "$id" \
         --arg title "$(config_uci_get "$id" title)" \
         --argjson community "$(config_uci_list_json "$id" community_list)" \
+        --argjson community_subnet "$(config_community_subnets_json "$id")" \
         --argjson domain "$(config_uci_list_json "$id" domain)" \
         --argjson subnet "$(config_uci_list_json "$id" subnet)" \
         --argjson extra_domain "$(userlist_entries_json "$id" domains)" \
@@ -97,7 +111,7 @@ config_profile_json() {
             title: $title,
             community_list: $community,
             domain: (($domain + $extra_domain) | unique),
-            subnet: (($subnet + $extra_subnet) | unique)
+            subnet: (($subnet + $extra_subnet + $community_subnet) | unique)
         }'
 }
 

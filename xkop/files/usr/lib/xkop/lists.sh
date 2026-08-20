@@ -23,6 +23,100 @@ lists_geosite_path() {
     printf '%s/geosite.dat' "$XKOP_ASSET_DIR"
 }
 
+# Subnets of the community lists.
+#
+# geosite.dat holds names and nothing else, and a whole class of services is
+# not reachable by name at all: the Telegram client goes to hardcoded
+# addresses, and so do Discord voice, Meta and the ASN lists. Adding such a
+# list to a profile and getting no change is not a mystery - there was never
+# anything for a domain rule to match.
+#
+# sing-box gets both halves in one .srs file, which is why the same lists work
+# there without any of this. For us the addresses live separately, as plain
+# text, and they are turned into "ip" entries of the same routing rule the
+# domains produce.
+XKOP_SUBNET_BASE='https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Subnets/IPv4'
+
+# Категории, у которых подсети есть. Список закрытый намеренно: имени файла
+# для остальных в репозитории нет, и попытка скачать его каждый раз даёт 404
+# и запись в журнале, которая выглядит как поломка.
+XKOP_SUBNET_LISTS='telegram discord meta twitter cloudflare cloudfront digitalocean google_meet hetzner ovh roblox'
+
+lists_subnet_dir() {
+    printf '%s/subnets' "$XKOP_CACHE_DIR"
+}
+
+# geosite пишет имена через дефис, файлы подсетей - через подчёркивание.
+lists_subnet_name() {
+    printf '%s' "$1" | tr '-' '_'
+}
+
+lists_subnet_has() {
+    local name entry
+    name=$(lists_subnet_name "$1")
+    for entry in $XKOP_SUBNET_LISTS; do
+        [ "$entry" = "$name" ] && return 0
+    done
+    return 1
+}
+
+lists_subnet_path() {
+    printf '%s/%s.lst' "$(lists_subnet_dir)" "$(lists_subnet_name "$1")"
+}
+
+# Одна категория. Кэш - источник истины: неудачная загрузка не имеет права
+# ухудшить то, что уже работает.
+lists_subnet_fetch() {
+    local category="$1" name target tmp
+
+    lists_subnet_has "$category" || return 0
+
+    name=$(lists_subnet_name "$category")
+    target=$(lists_subnet_path "$category")
+    mkdir -p "$(lists_subnet_dir)" "$XKOP_RUN_DIR"
+    tmp="$XKOP_RUN_DIR/subnet-$name.lst"
+
+    if ! curl -fsSL --max-time 60 -o "$tmp" "$XKOP_SUBNET_BASE/$name.lst" 2> /dev/null; then
+        [ -s "$target" ] && return 0
+        log_warn "подсети списка $category не скачались"
+        return 1
+    fi
+
+    # Пустой ответ и страница ошибки - не список. Проверяется тем же способом,
+    # что и пользовательские списки: в файле должна быть хоть одна подсеть.
+    if ! grep -q '^[0-9][0-9.]*/[0-9]' "$tmp" 2> /dev/null; then
+        rm -f "$tmp"
+        [ -s "$target" ] && return 0
+        log_warn "в ответе для $category подсетей нет, файл не взят"
+        return 1
+    fi
+
+    mv "$tmp" "$target"
+    return 0
+}
+
+# Подсети категории из кэша, по одной в строке.
+lists_subnet_entries() {
+    local target
+    target=$(lists_subnet_path "$1")
+    [ -s "$target" ] || return 0
+    grep '^[0-9][0-9.]*/[0-9]' "$target" 2> /dev/null
+}
+
+# Обновление подсетей всех категорий, упомянутых хоть в одном профиле.
+lists_subnets_update() {
+    local profile category
+    command -v uci > /dev/null 2>&1 || return 0
+
+    for profile in $(uci -q show "$XKOP_CONFIG" 2> /dev/null \
+        | sed -n "s/^$XKOP_CONFIG\.\([^.]*\)=profile$/\1/p"); do
+        for category in $(uci -q get "$XKOP_CONFIG.$profile.community_list" 2> /dev/null); do
+            lists_subnet_fetch "$category"
+        done
+    done
+    return 0
+}
+
 lists_present() {
     [ -s "$(lists_geosite_path)" ]
 }

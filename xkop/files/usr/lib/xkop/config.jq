@@ -222,9 +222,25 @@ def output_sockopt:
     (settings.output_interface // "")
     | if . == "" then {} else {sockopt: {interface: .}} end;
 
+# Как прямой исходящий выбирает адрес назначения.
+#
+# "UseIP" заставляет движок разрешить имя заново перед каждым новым прямым
+# соединением - при том, что адрес уже известен: его разрешил клиент, а tproxy
+# принёс вместе с пакетом. Лишний запрос ничего не даёт и всё портит: пока наш
+# резолвер отвечает медленно или не отвечает вовсе - а DoH к публичным
+# резолверам душат ровно там, где этот роутер и нужен, - каждое прямое
+# соединение ждёт таймаута. Внешне это выглядит как "интернет тормозит",
+# и причина не называется нигде.
+#
+# "AsIs" берёт адрес, который пришёл с пакетом. Исключение - режим поддельных
+# адресов: там пришедший адрес поддельный и разрешать его обязательно.
+def direct_domain_strategy:
+    if fakeip_enabled then "UseIP" else "AsIs" end;
+
 def service_outbounds:
     [
-        ({tag: service_tags.direct, protocol: "freedom", settings: {domainStrategy: "UseIP"}}
+        ({tag: service_tags.direct, protocol: "freedom",
+          settings: {domainStrategy: direct_domain_strategy}}
          + (if (output_sockopt | length) > 0 then {streamSettings: output_sockopt} else {} end)),
         {tag: service_tags.block, protocol: "blackhole"}
     ]
@@ -238,6 +254,34 @@ def outbounds_section:
 
 # One balancer over the whole pool. The engine excludes nodes the observatory
 # calls dead by itself, so quarantine is native and ours only to display.
+# Как выбирается узел.
+#
+# leastPing берёт наименьшую задержку и ничего не знает про то, что было
+# секунду назад: два узла с близкими значениями меняются местами от шума
+# измерения, и выбор скачет без всякой пользы. Прямого «не переключайся, пока
+# разница меньше стольких-то миллисекунд» у движка нет - в sing-box это
+# tolerance у urltest, здесь такого поля не существует.
+#
+# Что есть - пороги у leastLoad: узлы быстрее первого порога считаются равными,
+# и мелкая разница между ними перестаёт что-либо решать. expected: 1 оставляет
+# один узел, чтобы соединения не размазывались по всей группе.
+#
+# Формы проверены на самом движке: он принимает и baselines, и maxRTT,
+# и tolerance, но смысл им придаёт только leastLoad.
+def balancer_strategy:
+    (settings.strategy // "leastLoad") as $type
+    | if $type == "leastLoad" then
+        {
+            type: "leastLoad",
+            settings: {
+                baselines: (settings.strategy_baselines // ["300ms", "600ms", "1s"]),
+                expected: 1
+            }
+        }
+      else
+        {type: $type}
+      end;
+
 def balancers_section:
     node_tags as $tags
     | if ($tags | length) == 0 then
@@ -246,7 +290,7 @@ def balancers_section:
         [{
             tag: "pool",
             selector: $tags,
-            strategy: {type: (settings.strategy // "leastPing")},
+            strategy: balancer_strategy,
             fallbackTag: service_tags.direct
         }]
       end;
