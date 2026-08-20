@@ -119,13 +119,26 @@ nodes_json() {
         }'
 }
 
-# Manual choice, or back to automatic. The engine is told; nothing is written
-# down here, because a pin that survives a restart of the engine but not of the
-# router would be a state nobody can explain.
+# Выбор человека, или обратно к автоматическому.
+#
+# Закрепление живёт в памяти движка и умирает вместе с ним: после перезапуска
+# выбранный узел молча переставал быть выбранным. Раньше здесь стояло
+# рассуждение, что закрепление, пережившее движок, но не роутер, объяснить
+# нельзя, — и вывод из него был сделан неверный. Объяснимо ровно обратное:
+# выбранное человеком остаётся выбранным, пока он сам не передумает. Поэтому
+# выбор записывается туда же, где живёт память автоматики, и восстанавливается
+# при старте.
+nodes_manual_marker() {
+    printf '%s/manualpin' "$XKOP_STATE_DIR"
+}
+
 nodes_select() {
     local tag="$1"
 
+    mkdir -p "$XKOP_STATE_DIR" 2> /dev/null
+
     if [ "$tag" = "auto" ] || [ -z "$tag" ]; then
+        rm -f "$(nodes_manual_marker)" 2> /dev/null
         nodes_api bo -b "$XKOP_BALANCER_TAG" -r > /dev/null
         case "$?" in
             0) jq -nc '{ok: true, selection: "auto", selected: null}' ;;
@@ -143,7 +156,10 @@ nodes_select() {
 
     nodes_api bo -b "$XKOP_BALANCER_TAG" "$tag" > /dev/null
     case "$?" in
-        0) jq -nc --arg tag "$tag" '{ok: true, selection: "manual", selected: $tag}' ;;
+        0)
+            printf '%s' "$tag" > "$(nodes_manual_marker)"
+            jq -nc --arg tag "$tag" '{ok: true, selection: "manual", selected: $tag}'
+            ;;
         2) jq -nc '{ok: false, error: "engine_not_found"}' ;;
         *) jq -nc --arg tag "$tag" '{ok: false, error: "override_failed", detail: {tag: $tag}}' ;;
     esac
@@ -197,7 +213,7 @@ nodes_max_delay() {
 }
 
 nodes_keep() {
-    local selection override current marker mine tolerance max_delay
+    local selection override current marker mine chosen tolerance max_delay
     local stats alive best best_delay current_delay reason=""
 
     selection=$(nodes_selection_json)
@@ -210,6 +226,23 @@ nodes_keep() {
     marker=$(nodes_autopin_marker)
     mkdir -p "$XKOP_STATE_DIR" 2> /dev/null
     mine=$(cat "$marker" 2> /dev/null)
+
+    # Выбор человека восстанавливается первым и без оговорок: движок потерял
+    # закрепление при перезапуске, а решение осталось.
+    chosen=$(cat "$(nodes_manual_marker)" 2> /dev/null)
+    if [ -n "$chosen" ] && [ -z "$override" ]; then
+        if subscription_pool_all | jq -e --arg tag "$chosen"             'any(.[]; .tag == $tag)' > /dev/null 2>&1             && nodes_api bo -b "$XKOP_BALANCER_TAG" "$chosen" > /dev/null 2>&1; then
+
+            log_info "восстановлен закреплённый вручную узел: $chosen"
+            jq -nc --arg tag "$chosen"                 '{ok: true, result: "manual", selected: $tag,
+                  reason: "закреплено вручную, восстановлено после перезапуска"}'
+            return 0
+        fi
+
+        # Узла больше нет в пуле — держать нечего, и врать об этом тоже.
+        rm -f "$(nodes_manual_marker)" 2> /dev/null
+        log_warn "закреплённый вручную узел $chosen пропал из пула, возвращаю автовыбор"
+    fi
 
     # Чужое закрепление - решение человека, и оно не обсуждается.
     if [ -n "$override" ] && [ "$override" != "$mine" ]; then

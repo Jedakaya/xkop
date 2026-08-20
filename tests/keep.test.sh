@@ -172,6 +172,33 @@ printf 'XX' > "$(nodes_autopin_marker)"
 out=$(nodes_keep)
 check "исчезнувший из пула узел не возвращается" "no_data"     "$(printf '%s' "$out" | "$JQ" -r '.result')"
 
+# --- выбор человека переживает перезапуск ---------------------------------
+#
+# Закрепление живёт в памяти движка и умирает вместе с ним. Раньше это значило,
+# что выбранный узел после перезапуска молча переставал быть выбранным.
+
+reset
+rm -f "$(nodes_manual_marker)"
+SELECTION='{"ok":true,"balancer":"pool","selection":"auto","selected":"DE","override":null}'
+STATS='{"observatory":{"nodes":[{"tag":"DE","state":"alive","delay_ms":100},{"tag":"FI","state":"alive","delay_ms":900}]}}'
+printf 'FI' > "$(nodes_manual_marker)"
+
+out=$(nodes_keep)
+check "выбор человека восстановлен после перезапуска" "manual"     "$(printf '%s' "$out" | "$JQ" -r '.result')"
+check "и это именно его узел, даже если он медленнее" "FI" "$(pinned)"
+
+# Узел пропал из пула — держать нечего, и метку надо убрать.
+reset
+printf 'YY' > "$(nodes_manual_marker)"
+out=$(nodes_keep)
+check "пропавший из пула выбор не восстанавливается" ""     "$(cat "$(nodes_manual_marker)" 2> /dev/null)"
+
+# Возврат к автовыбору снимает память о ручном закреплении.
+reset
+printf 'FI' > "$(nodes_manual_marker)"
+nodes_select auto > /dev/null
+check "автовыбор снимает память о ручном" ""     "$(cat "$(nodes_manual_marker)" 2> /dev/null)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
