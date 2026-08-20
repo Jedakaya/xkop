@@ -792,7 +792,7 @@ if [ -z "$INSTALLED_FROM" ]; then
     XKOP_LIBS="constants.sh logging.sh version.sh stats.sh stats.jq
 subscription.sh subscription.jq config.sh config.jq lists.sh userlists.sh
 nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh update.sh
-service.sh"
+service.sh migrate.sh"
 
     for lib in $XKOP_LIBS; do
         fetch_repo_file "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" \
@@ -839,6 +839,51 @@ service.sh"
     fi
 
     INSTALLED_FROM="branch"
+fi
+
+# --- списки, вбитые руками в podkop ---------------------------------------
+#
+# У человека, жившего на podkop годами, в пользовательских списках лежат
+# десятки доменов и подсетей — по одному, по мере того как что-то
+# не открывалось. Заставлять вводить это заново значит потерять половину:
+# часть он просто не вспомнит, и переход выйдет болезненным на ровном месте.
+#
+# Настройки podkop установщик оставляет на диске намеренно, поэтому перенести
+# их можно уже после установки. Переносятся только пользовательские списки:
+# категории, резолвер и подписка настраиваются заново и осознанно.
+#
+# Только в пустой профиль. Второй запуск установщика на настроенном роутере
+# не имеет права трогать то, что человек уже поправил руками.
+
+# Файл переноса берётся с ветки, а не из установленного пакета: при установке
+# пакетом его в системе ещё нет, и условие «если файл на месте» тихо пропустило
+# бы перенос ровно там, где он нужен, — на первой установке.
+if [ -f /etc/config/podkop ]; then
+    if [ -z "$(uci -q get xkop.blocked_ru.domain)" ] \
+        && [ -z "$(uci -q get xkop.blocked_ru.subnet)" ]; then
+
+        say "списки из podkop"
+
+        moved=""
+        if fetch_repo_file "xkop/files/usr/lib/xkop/migrate.sh" "$WORK/migrate.sh"; then
+            moved=$(
+                XKOP_CONFIG=xkop
+                export XKOP_CONFIG
+                # shellcheck source=/dev/null
+                . "$WORK/migrate.sh"
+                migrate_podkop_apply blocked_ru 2> /dev/null
+            )
+        else
+            warn "не удалось скачать перенос списков, пропускаю"
+        fi
+
+        if [ -n "$moved" ] && [ "$moved" -gt 0 ] 2> /dev/null; then
+            note "перенесено записей: $moved (свои домены и подсети)"
+            note "категории, резолвер и подписку задайте сами — они не переносятся"
+        else
+            note "переносить нечего"
+        fi
+    fi
 fi
 
 # --- панель ---------------------------------------------------------------
