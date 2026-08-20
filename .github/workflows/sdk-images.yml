@@ -6,9 +6,13 @@ name: SDK images
 #
 # Run this once by hand before the first package build, and then only when
 # sdk/ changes.
+# Ветка указана обязательно: фильтры путей на теги GitHub не применяет вовсе,
+# поэтому без `branches` тяжёлый образ SDK пересобирался на каждый тег впустую.
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
       - 'sdk/**'
       - '.github/workflows/sdk-images.yml'
