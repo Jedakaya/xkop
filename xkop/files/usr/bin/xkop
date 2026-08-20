@@ -21,6 +21,7 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 . "$XKOP_LIB_DIR/canary.sh"
 . "$XKOP_LIB_DIR/nodes.sh"
 . "$XKOP_LIB_DIR/diagnostics.sh"
+. "$XKOP_LIB_DIR/explain.sh"
 . "$XKOP_LIB_DIR/service.sh"
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
@@ -147,6 +148,8 @@ xkop - маршрутизатор трафика на Xray-core
                              панель
   subscription_update [id]   обновить подписку или все сразу
   get_subscription_userinfo  трафик и срок из заголовка подписки
+  explain <домен>            куда ушёл этот домен и почему
+  recent [сколько]           какие домены куда уходили в последнее время
   nodes                      узлы пула: состояние и какой выбран сейчас
   select <тег|auto>          закрепить узел вручную или вернуть автовыбор
   canary                     проверка подмены DNS провайдером
@@ -194,6 +197,16 @@ main() {
                 '{ok: $present,
                   result: (if $present then "present" else "missing" end),
                   path: $path}'
+            ;;
+        explain)
+            explain_domain "${1:-}"
+            ;;
+        recent)
+            explain_recent "${1:-20}"
+            ;;
+        access_trim)
+            access_trim
+            jq -nc '{ok: true, result: "trimmed"}'
             ;;
         nodes)
             nodes_json

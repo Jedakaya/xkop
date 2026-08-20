@@ -39,10 +39,16 @@ check() {
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-"$JQ" -f "$PROGRAM" "$FIXTURES/with-pool.json" > "$work/with-pool.json"
-"$JQ" -f "$PROGRAM" "$FIXTURES/empty-pool.json" > "$work/empty-pool.json"
-"$JQ" -f "$PROGRAM" "$FIXTURES/fakeip.json" > "$work/fakeip.json"
-"$JQ" -f "$PROGRAM" "$FIXTURES/protection.json" > "$work/protection.json"
+# Журнал доступа пишется в каталог, который на роутере создаёт сама служба.
+# В проверке подставляется путь внутри временного каталога — движок при
+# запуске требует, чтобы каталог существовал.
+generate() {
+    "$JQ" --arg path "$work/access.log" '.settings.access_log_path = $path' "$FIXTURES/$1.json"         | "$JQ" -f "$PROGRAM" > "$work/$1.json"
+}
+
+for fixture in with-pool empty-pool fakeip protection; do
+    generate "$fixture"
+done
 
 q() { "$JQ" -c "$2" "$work/$1"; }
 
@@ -94,9 +100,14 @@ check "без узлов привязка уходит напрямую" '"direc
 # Режим fakeip: имена решаются DNS-слоем движка, а не именем внутри соединения.
 check "по умолчанию DNS не трогается" "false"     "$(q with-pool.json 'has("dns")')"
 check "по умолчанию поддельных адресов нет" "false"     "$(q with-pool.json 'has("fakedns")')"
-check "по умолчанию слушателя DNS нет" '["tproxy-in"]'     "$(q with-pool.json '[.inbounds[].tag]')"
+check "по умолчанию слушателя DNS нет" '["tproxy-in","probe-in"]'     "$(q with-pool.json '[.inbounds[].tag]')"
 
-check "в режиме fakeip появляется слушатель DNS" '["tproxy-in","dns-in"]'     "$(q fakeip.json '[.inbounds[].tag]')"
+check "в режиме fakeip появляется слушатель DNS" '["tproxy-in","probe-in","dns-in"]'     "$(q fakeip.json '[.inbounds[].tag]')"
+
+# Журнал доступа — это то, на чём держится разбор маршрута: движок пишет
+# в него выбранный исходящий по каждому соединению.
+check "журнал доступа включён по умолчанию" "true"     "$(q with-pool.json '.log.access != "none"')"
+check "слушатель для проб только на петле" '"127.0.0.1"'     "$(q with-pool.json '.inbounds[] | select(.tag == "probe-in") | .listen')"
 check "распознавание разворачивает поддельный адрес" "true"     "$(q fakeip.json '.inbounds[0].sniffing.destOverride | index("fakedns") != null')"
 check "поддельные адреса только для маршрутизируемых имён" '["geosite:google","example.com","ads.example.com"]'     "$(q fakeip.json '.dns.servers[0].domains')"
 check "выученная заглушка ушла в отбраковку" '["46.191.166.9"]'     "$(q fakeip.json '.dns.servers[1].unexpectedIPs')"

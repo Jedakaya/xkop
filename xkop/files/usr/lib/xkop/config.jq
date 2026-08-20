@@ -32,8 +32,30 @@ def settings: .settings;
 # the only honest way when names come from a subscription and have no shape.
 def node_tags: [ .pool[]?.tag ];
 
+# The access log records one line per connection, and in it the outbound the
+# engine actually chose. That is the difference between explaining a route and
+# guessing at one: the answer comes from what happened, not from our reading of
+# our own rules. It goes to RAM and is trimmed on a schedule.
 def log_section:
-    {loglevel: (settings.log_level // "warning")};
+    {
+        loglevel: (settings.log_level // "warning"),
+        access: (if (settings.access_log // "1") == "1"
+                 then (settings.access_log_path // "/tmp/xkop/access.log")
+                 else "none" end)
+    };
+
+# Loopback only, and there to answer one question: what does the engine do with
+# this name. The explain command sends a probe through it and reads the answer
+# out of the access log.
+def probe_inbound:
+    {
+        tag: "probe-in",
+        protocol: "socks",
+        listen: "127.0.0.1",
+        port: (settings.probe_port // 10809),
+        settings: {udp: false},
+        sniffing: {enabled: true, destOverride: ["http", "tls"], routeOnly: true}
+    };
 
 # Counters are what the dashboard is built on. Without the stats object the
 # metrics endpoint has nothing to serve, and without the policy switches the
@@ -115,7 +137,7 @@ def dns_inbound:
     };
 
 def inbounds_section:
-    [ tproxy_inbound ]
+    [ tproxy_inbound, probe_inbound ]
     + (if fakeip_enabled then [ dns_inbound ] else [] end);
 
 # Domains that are routed through a channel rather than straight out. Only

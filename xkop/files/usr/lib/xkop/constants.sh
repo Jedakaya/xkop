@@ -51,3 +51,14 @@ XKOP_STATE_DIR='/etc/xkop'
 XKOP_CACHE_DIR='/etc/xkop/cache'
 XKOP_RUN_DIR='/tmp/xkop'
 XKOP_CONFIG_PATH='/etc/xkop/config.json'
+
+# Access log: one line per connection, with the outbound the engine chose.
+# This is what makes route explanation an observation rather than a guess.
+# It lives in RAM and is trimmed on a schedule - unbounded it would fill /tmp
+# on a busy network within a day.
+XKOP_ACCESS_LOG='/tmp/xkop/access.log'
+XKOP_ACCESS_LOG_MAX_KB='2048'
+
+# Loopback-only socks inbound used by the explain command to ask the engine
+# what it would do with a name, by actually making it do it.
+XKOP_PROBE_PORT='10809'
