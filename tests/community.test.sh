@@ -113,6 +113,25 @@ rules=$(printf '%s' "$profile" | "$JQ" -c '{settings: {}, pool: [], bindings: [{
 check "адреса стали правилом маршрутизации" "true" \
     "$(printf '%s' "$rules" | "$JQ" '[.routing.rules[] | select(.ip? != null) | .ip[]] | any(. == "149.154.160.0/20")')"
 
+# Категория со своими подсетями обязана предлагаться в интерфейсе.
+#
+# Перечень категорий я собрал разбором geosite.dat — файла ИМЁН. Списки,
+# состоящие только из подсетей, туда не попадают вовсе, и cloudflare
+# с cloudfront выпали из интерфейса. А это ровно те, которыми ловится сайт
+# за Cloudflare: имени такого сайта нет ни в одном списке, а адрес есть.
+#
+# На живом роутере это стоило часа: соединения к 104.16.248.249 уходили
+# напрямую и сбрасывались, downdetector не открывался, а выбрать нужную
+# категорию было негде.
+ui="$ROOT/luci-app-xkop/htdocs/luci-static/resources/view/xkop/settings.js"
+missing=""
+for name in $XKOP_SUBNET_LISTS; do
+    ui_name=$(printf '%s' "$name" | tr '_' '-')
+    grep -q "\"$ui_name\"" "$ui" || missing="$missing $ui_name"
+done
+
+check "все категории с подсетями есть в интерфейсе" "" "$missing"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

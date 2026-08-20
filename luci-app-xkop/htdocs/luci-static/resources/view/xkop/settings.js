@@ -2,6 +2,7 @@
 "require form";
 "require uci";
 "require ui";
+"require network";
 
 // Региональные списки взаимно исключают друг друга, а «Россия, внутренние»
 // уже содержит часть сервисов. Имена сверены с самим geosite.dat из релиза
@@ -15,9 +16,9 @@ const WITH_RUSSIA_INSIDE = [
   "russia-inside",
   "meta", "twitter", "discord", "telegram",
   "google-ai", "google-play", "google-meet",
+  "cloudflare", "cloudfront",
   "hetzner", "ovh", "digitalocean", "hodca", "roblox",
 ];
-"require network";
 
 // Настройки.
 //
@@ -104,7 +105,7 @@ function profiles(map) {
   // по памяти: категория, которой в файле нет, молча не сработает, и профиль
   // будет выглядеть настроенным, ничего не направляя.
   o = s.option(form.DynamicList, "community_list", _("Списки сообщества"),
-    _("Категории из geosite. Источник: itdoginfo/allow-domains."));
+    _("Категории из itdoginfo/allow-domains. Те, что помечены «сети», состоят из подсетей: они ловят сервисы, у которых имя в списке не найти — например сайт за Cloudflare, чей адрес никак иначе не опознать."));
   [
     ["russia-inside", _("Россия, внутренние")],
     ["russia-outside", _("Россия, внешние")],
@@ -126,6 +127,8 @@ function profiles(map) {
     ["news", _("Новости")],
     ["porn", _("Взрослое")],
     ["hodca", "H.O.D.C.A"],
+    ["cloudflare", _("Cloudflare, сети")],
+    ["cloudfront", _("CloudFront, сети")],
     ["hetzner", _("Hetzner, сети")],
     ["ovh", _("OVH, сети")],
     ["digitalocean", _("DigitalOcean, сети")],
