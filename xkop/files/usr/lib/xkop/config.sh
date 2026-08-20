@@ -1,0 +1,161 @@
+#!/bin/sh
+# shellcheck shell=ash
+# Configuration: uci and the subscription pool -> a validated Xray config.
+#
+# The shape of the work is deliberate. Everything uncertain is collected here,
+# in shell, into one JSON object; the generation itself is a pure function in
+# config.jq. That way the generator can be run against a recorded input and the
+# result checked by the engine itself, without a router in the loop.
+#
+# The invariant that governs installation is not negotiable: an invalid
+# configuration is never installed, and a failed generation never cancels a
+# start. The engine keeps running on the last configuration known to work,
+# because a rejected configuration means no engine, and no engine on a router
+# whose traffic goes through it means no network at all.
+
+config_uci_get() {
+    uci -q get "$XKOP_CONFIG.$1.$2" 2> /dev/null
+}
+
+config_uci_list_json() {
+    subscription_config_list "$1" "$2" 2> /dev/null | jq -R -s -c 'split("\n") | map(select(. != ""))'
+}
+
+config_section_ids() {
+    uci -q show "$XKOP_CONFIG" 2> /dev/null \
+        | sed -n "s/^$XKOP_CONFIG\.\([^.=]*\)=$1$/\1/p"
+}
+
+config_settings_json() {
+    jq -nc \
+        --arg log_level "$(config_uci_get settings log_level)" \
+        --arg metrics_port "$(config_uci_get settings metrics_port)" \
+        --arg tproxy_address "$XKOP_TPROXY_ADDRESS" \
+        --arg tproxy_port "$XKOP_TPROXY_PORT" \
+        --arg strategy "$(config_uci_get settings strategy)" \
+        --arg probe_url "$(config_uci_get settings probe_url)" \
+        --arg probe_interval "$(config_uci_get settings probe_interval)" \
+        '{
+            log_level: (if $log_level == "" then "warning" else $log_level end),
+            metrics_port: (($metrics_port | tonumber?) // 11111),
+            tproxy_address: $tproxy_address,
+            tproxy_port: (($tproxy_port | tonumber?) // 1608),
+            strategy: (if $strategy == "" then "leastPing" else $strategy end),
+            probe_url: (if $probe_url == "" then null else $probe_url end),
+            probe_interval: (if $probe_interval == "" then null else $probe_interval end)
+        }'
+}
+
+config_profile_json() {
+    local id="$1"
+
+    jq -nc \
+        --arg id "$id" \
+        --arg title "$(config_uci_get "$id" title)" \
+        --argjson community "$(config_uci_list_json "$id" community_list)" \
+        --argjson domain "$(config_uci_list_json "$id" domain)" \
+        --argjson subnet "$(config_uci_list_json "$id" subnet)" \
+        '{id: $id, title: $title, community_list: $community, domain: $domain, subnet: $subnet}'
+}
+
+config_channel_json() {
+    local id="$1"
+
+    jq -nc \
+        --arg id "$id" \
+        --arg type "$(config_uci_get "$id" type)" \
+        --argjson subscription "$(config_uci_list_json "$id" subscription)" \
+        '{id: $id, type: (if $type == "" then "direct" else $type end), subscription: $subscription}'
+}
+
+# A binding pointing at something that does not exist is a warning and a skip,
+# never a refusal: one mistyped name must not take the whole router down.
+config_bindings_json() {
+    local id profile channel result='[]' order
+
+    for id in $(config_section_ids binding); do
+        profile=$(config_uci_get "$id" profile)
+        channel=$(config_uci_get "$id" channel)
+        order=$(config_uci_get "$id" order)
+        [ -n "$order" ] || order=100
+
+        if [ -z "$profile" ] || [ -z "$channel" ]; then
+            log_warn "привязка $id без профиля или канала, пропущена"
+            continue
+        fi
+        if [ "$(config_uci_get "$profile" title)" = "" ] && [ -z "$(uci -q show "$XKOP_CONFIG.$profile" 2> /dev/null)" ]; then
+            log_warn "привязка $id ссылается на несуществующий профиль $profile, пропущена"
+            continue
+        fi
+        if [ -z "$(uci -q show "$XKOP_CONFIG.$channel" 2> /dev/null)" ]; then
+            log_warn "привязка $id ссылается на несуществующий канал $channel, пропущена"
+            continue
+        fi
+
+        result=$(printf '%s' "$result" | jq -c \
+            --argjson order "$order" \
+            --argjson profile "$(config_profile_json "$profile")" \
+            --argjson channel "$(config_channel_json "$channel")" \
+            '. + [{order: $order, profile: $profile, channel: $channel}]')
+    done
+
+    printf '%s' "$result"
+}
+
+config_input_json() {
+    jq -nc \
+        --argjson settings "$(config_settings_json)" \
+        --argjson pool "$(subscription_pool_all)" \
+        --argjson bindings "$(config_bindings_json)" \
+        '{settings: $settings, pool: $pool, bindings: $bindings}'
+}
+
+config_engine_bin() {
+    command -v "${XKOP_ENGINE_BIN:-xray}" 2> /dev/null || echo "${XKOP_ENGINE_BIN:-xray}"
+}
+
+# The engine decides, not us. Anything else is an opinion about a format that
+# changes with every release.
+config_validate() {
+    local file="$1" engine
+    engine=$(config_engine_bin)
+
+    command -v "$engine" > /dev/null 2>&1 || return 2
+
+    # The format is stated outright rather than left to the file name: the
+    # engine guesses it from the extension, and a candidate written as
+    # "config.json.new" is refused before it is even parsed.
+    "$engine" run -test -format json -c "$file" > /dev/null 2>&1
+}
+
+# Generates, validates, installs. Returns 0 when a new configuration is in
+# place, 1 when the old one was kept, 2 when there was nothing to install.
+config_generate() {
+    local new old
+    mkdir -p "$XKOP_RUN_DIR" "$(dirname "$XKOP_CONFIG_PATH")"
+    new="$XKOP_RUN_DIR/config.json.new"
+
+    if ! config_input_json | jq -f "$XKOP_LIB_DIR/config.jq" > "$new" 2> "$XKOP_RUN_DIR/config.err"; then
+        log_error "конфигурация не собралась: $(head -n 1 "$XKOP_RUN_DIR/config.err" 2> /dev/null)"
+        return 1
+    fi
+
+    if ! config_validate "$new"; then
+        case "$?" in
+            2) log_warn "движок не найден, конфигурация не проверена и не установлена" ;;
+            *) log_error "движок отверг новую конфигурацию, оставляю прежнюю" ;;
+        esac
+        return 1
+    fi
+
+    if [ -f "$XKOP_CONFIG_PATH" ] && cmp -s "$new" "$XKOP_CONFIG_PATH"; then
+        log_info "конфигурация не изменилась"
+        return 2
+    fi
+
+    old="$XKOP_CONFIG_PATH.previous"
+    [ -f "$XKOP_CONFIG_PATH" ] && cp "$XKOP_CONFIG_PATH" "$old"
+    cp "$new" "$XKOP_CONFIG_PATH.tmp" && mv "$XKOP_CONFIG_PATH.tmp" "$XKOP_CONFIG_PATH"
+    log_info "конфигурация обновлена"
+    return 0
+}

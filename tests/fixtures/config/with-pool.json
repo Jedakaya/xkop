@@ -1,0 +1,43 @@
+{
+  "settings": {
+    "log_level": "warning",
+    "metrics_port": 11111,
+    "tproxy_address": "127.0.0.1",
+    "tproxy_port": 1608,
+    "strategy": "leastPing",
+    "probe_interval": "3m"
+  },
+  "pool": [
+    {
+      "tag": "NL-Amsterdam-2",
+      "protocol": "vless",
+      "outbound": {
+        "tag": "NL-Amsterdam-2",
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": "nl2.example.com", "port": 443,
+          "users": [{"id": "8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+        "streamSettings": {"network": "raw", "security": "reality",
+          "realitySettings": {"serverName": "www.microsoft.com", "fingerprint": "chrome",
+            "publicKey": "sZ9m0Zp2Qk3xWv1nB7cA5dE8fG2hJ4kL6mN8pQ0rS2t", "shortId": "a1b2c3d4"}}
+      }
+    },
+    {
+      "tag": "DE-Frankfurt-1",
+      "protocol": "hysteria",
+      "outbound": {
+        "tag": "DE-Frankfurt-1",
+        "protocol": "hysteria",
+        "settings": {"version": 2, "address": "de1.example.com", "port": 8443},
+        "streamSettings": {"network": "hysteria", "security": "tls",
+          "tlsSettings": {"serverName": "de1.example.com"},
+          "hysteriaSettings": {"version": 2, "auth": "s3cr3t-pass"}}
+      }
+    }
+  ],
+  "bindings": [
+    {"order": 10, "channel": {"type": "subscription"},
+     "profile": {"community_list": ["google"], "domain": ["example.com"], "subnet": ["203.0.113.0/24"]}},
+    {"order": 20, "channel": {"type": "block"}, "profile": {"domain": ["ads.example.com"]}},
+    {"order": 30, "channel": {"type": "direct"}, "profile": {"domain": ["bank.example.com"]}}
+  ]
+}

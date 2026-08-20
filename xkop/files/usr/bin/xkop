@@ -9,9 +9,41 @@
 XKOP_LIB_DIR='/usr/lib/xkop'
 
 . "$XKOP_LIB_DIR/constants.sh"
+. "$XKOP_LIB_DIR/logging.sh"
 . "$XKOP_LIB_DIR/version.sh"
 . "$XKOP_LIB_DIR/stats.sh"
 . "$XKOP_LIB_DIR/subscription.sh"
+. "$XKOP_LIB_DIR/config.sh"
+
+# Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
+# а не кодом возврата: «оставлена прежняя» — это не отказ команды.
+cmd_configure() {
+    local rc reason
+
+    config_generate
+    rc=$?
+
+    case "$rc" in
+        0) reason="installed" ;;
+        2) reason="unchanged" ;;
+        *) reason="kept_previous" ;;
+    esac
+
+    jq -nc --arg reason "$reason" --arg path "$XKOP_CONFIG_PATH" \
+        --argjson nodes "$(subscription_pool_all | jq 'length')" \
+        --argjson exists "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
+        '{ok: ($reason != "kept_previous"), result: $reason, path: $path,
+          nodes: $nodes, config_present: $exists}'
+}
+
+cmd_show_engine_config() {
+    if [ -s "$XKOP_CONFIG_PATH" ]; then
+        cat "$XKOP_CONFIG_PATH"
+    else
+        jq -nc --arg path "$XKOP_CONFIG_PATH" \
+            '{ok: false, error: "no_config", detail: {path: $path}}'
+    fi
+}
 
 # Subscriptions, as the panel and LuCI see them: state, reason, what the panel
 # itself said, and how many servers came out. Never empty and never a bare
@@ -93,6 +125,12 @@ main() {
             ;;
         get_subscription_userinfo)
             cmd_subscription_userinfo
+            ;;
+        configure)
+            cmd_configure
+            ;;
+        show_engine_config | show_sing_box_config)
+            cmd_show_engine_config
             ;;
         version | --version | -v)
             printf '{"version":"%s"}\n' "$XKOP_VERSION"

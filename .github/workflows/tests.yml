@@ -48,5 +48,15 @@ jobs:
             exit 1
           fi
 
+      # Конфигурацию принимает или отвергает сам движок, а не наши
+      # представления о его схеме. Версия та же, что ставит установщик.
+      - name: Fetch engine
+        run: |
+          curl -fsSL -o /tmp/xray.zip \
+            https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+          unzip -o -q /tmp/xray.zip xray -d /tmp/xray
+          chmod +x /tmp/xray/xray
+          /tmp/xray/xray version | head -n 1
+
       - name: Run tests
-        run: sh tests/run.sh
+        run: XRAY=/tmp/xray/xray sh tests/run.sh

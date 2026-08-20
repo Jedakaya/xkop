@@ -1,0 +1,7 @@
+{
+  "settings": {"log_level": "warning", "metrics_port": 11111},
+  "pool": [],
+  "bindings": [
+    {"order": 10, "channel": {"type": "subscription"}, "profile": {"domain": ["example.com"]}}
+  ]
+}

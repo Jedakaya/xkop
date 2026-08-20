@@ -13,6 +13,10 @@ ROOT=$(dirname "$0")/..
 export ROOT
 export JQ=${JQ:-jq}
 
+# Движок, если он есть: конфигурацию проверяет он, а не мы. Наборы, которым
+# он не нужен, эту переменную просто не смотрят.
+export XRAY=${XRAY:-xray}
+
 failed=0
 
 for suite in "$ROOT"/tests/*.test.sh; do
