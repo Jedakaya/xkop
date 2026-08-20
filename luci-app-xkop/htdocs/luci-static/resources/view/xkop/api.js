@@ -44,6 +44,15 @@ function run(args) {
 return L.Class.extend({
   run: run,
 
+  // Всё, что показывает обзор, одним запуском. Пять команд на отрисовку
+  // страницы стоили секунд ожидания, и две из них лезли в сеть.
+  dashboard: function () {
+    return run(["dashboard"]);
+  },
+  service: function (action) {
+    return run(["service", action]);
+  },
+
   status: function () {
     return run(["get_status"]);
   },

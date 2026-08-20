@@ -217,3 +217,53 @@ diag_global_json() {
             )
         }'
 }
+
+# Everything the overview shows, in one process.
+#
+# The dashboard used to run five commands per render, and two of them asked
+# the network: the DNS and FakeIP checks each wait for a resolver, and the
+# canary probes on top of that. Seconds of waiting for a page whose job is to
+# say what is happening right now.
+#
+# What asks the network stays out of here on purpose. Live probes belong to a
+# button the user presses, not to opening a page.
+diag_dashboard_json() {
+    jq -nc \
+        --argjson status "$(service_status_json)" \
+        --argjson engine "$(cmd_check_engine)" \
+        --argjson nft "$(diag_nft_json)" \
+        --argjson subscriptions "$(cmd_subscriptions)" \
+        --argjson lists "$(lists_present && echo true || echo false)" \
+        --argjson stats "$(cmd_stats)" \
+        --argjson nodes "$(nodes_json)" \
+        --argjson canary "$(canary_cached_json)" \
+        --arg version "${XKOP_VERSION:-}" \
+        '
+        {
+            ok: true,
+            version: $version,
+            service: $status,
+            engine: $engine,
+            nft: $nft,
+            subscriptions: $subscriptions,
+            lists_present: $lists,
+            stats: $stats,
+            nodes: $nodes,
+            canary: $canary
+        }
+        | . + {
+            summary: (
+                if ($engine.engine_installed | not) then "движок не установлен"
+                elif ($status.engine.running | not) then "движок не запущен"
+                elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
+                elif ($nft.rules_present | not) then "правила nft не применены"
+                elif ([$subscriptions[] | select(.state == "ready")] | length) == 0
+                     and ($subscriptions | length) > 0 then
+                    "подписки не готовы: " + ([$subscriptions[] | .reason // .state] | join(", "))
+                elif ($status.nodes == 0) then "узлов нет, трафик идёт напрямую"
+                elif ($lists | not) then "списков доменов нет, правила по спискам не сработают"
+                else "работает"
+                end
+            )
+        }'
+}

@@ -13,8 +13,20 @@ WORKDIR /builder
 
 COPY ./xray-xkop /builder/package/feeds/utilities/xray-xkop
 
-RUN make defconfig \
-    && make package/xray-xkop/compile -j1 V=s XKOP_TARGET_ARCH=${XKOP_TARGET_ARCH}
+# Архитектура в описании пакета проверяется, а не подразумевается. Один раз
+# она подразумевалась: PKGARCH стоял снаружи блока Package, Package/Default
+# затирал его безусловно, и восемь пакетов уехали в релиз с arch: x86_64.
+# Ничего не падало — роутер просто отверг пакет как «uninstallable».
+RUN set -e; \
+    make defconfig; \
+    if ! make package/xray-xkop/compile -j1 V=s XKOP_TARGET_ARCH=${XKOP_TARGET_ARCH} > /tmp/build.log 2>&1; then \
+        tail -n 80 /tmp/build.log; exit 1; \
+    fi; \
+    if ! grep -q "arch:${XKOP_TARGET_ARCH}" /tmp/build.log; then \
+        echo "PKGARCH не доехал до пакета: ожидалась ${XKOP_TARGET_ARCH}"; \
+        grep -o "arch:[^ \"]*" /tmp/build.log | sort -u; \
+        exit 1; \
+    fi
 
 RUN mkdir -p /builder/out \
     && find /builder/bin -name 'xray-xkop*' -exec cp {} /builder/out/ ';'

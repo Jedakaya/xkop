@@ -170,6 +170,37 @@ service_on_wan_up() {
     fi
 }
 
+# One door for the interface. LuCI could call /etc/init.d/xkop itself, but then
+# the answer to "did it work" would be an exit code of the init script, which
+# says nothing about whether the engine came up. Here the action is followed by
+# the same status the overview shows.
+service_control() {
+    local action="${1:-status}"
+
+    case "$action" in
+        start | stop | restart)
+            /etc/init.d/xkop "$action" > /dev/null 2>&1
+            ;;
+        enable | disable)
+            /etc/init.d/xkop "$action" > /dev/null 2>&1
+            ;;
+        status) ;;
+        *)
+            jq -nc --arg a "$action" '{ok: false, error: "unknown_action", detail: {action: $a}}'
+            return 0
+            ;;
+    esac
+
+    # A start that returned zero and an engine that is actually up are not the
+    # same thing, and telling them apart is the whole point of asking.
+    case "$action" in
+        start | restart) engine_wait 20 > /dev/null 2>&1 ;;
+    esac
+
+    jq -nc --arg a "$action" --argjson status "$(service_status_json)" \
+        '{ok: true, action: $a} + $status'
+}
+
 service_status_json() {
     local enabled=0 running=0 answering=0 nodes=0
 

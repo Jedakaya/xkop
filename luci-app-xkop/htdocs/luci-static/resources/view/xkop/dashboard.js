@@ -86,6 +86,69 @@ function renderDistribution(stats) {
   return card(_("Распределение трафика"), rows);
 }
 
+// Первое, что нужно человеку, открывшему страницу: работает или нет, и чем
+// это включить. Раньше запустить роутер из интерфейса было нечем — только
+// командой в консоли, о которой ещё надо знать.
+function renderService(data) {
+  const svc = (data && data.service) || {};
+  const eng = (data && data.engine) || {};
+  const running = svc.engine && svc.engine.running;
+
+  const rows = [
+    line(_("состояние"), svc.state || _("неизвестно"), ""),
+    line(
+      _("движок"),
+      eng.engine_installed
+        ? _("Xray ") + (eng.engine_version || "?")
+        : _("не установлен"),
+      eng.engine_installed && eng.engine_version_ok === false
+        ? _("версия ниже требуемой")
+        : "",
+    ),
+    line(_("автозапуск"), svc.enabled ? _("включён") : _("выключен"), ""),
+  ];
+
+  if (!eng.engine_installed) {
+    rows.push(
+      E("div", { class: "xkop-warn-text" }, _("Без движка маршрутизировать нечем.")),
+    );
+    rows.push(
+      E("div", { class: "xkop-note" },
+        _("Поставить: xkop update, либо переустановить установщиком с GitHub.")),
+    );
+  }
+
+  function act(action, label, style) {
+    return E("button", {
+      class: "cbi-button " + style,
+      click: ui.createHandlerFn(this, function () {
+        return api.service(action).then(function (r) {
+          if (!r || !r.ok) {
+            ui.addNotification(null, E("p", {}, _("Не вышло: ") + ((r && r.error) || "?")), "error");
+            return;
+          }
+          // Показывается то, что стало, а не то, что мы просили сделать.
+          ui.addNotification(null, E("p", {}, _("Состояние: ") + (r.state || "?")),
+            r.engine && r.engine.running ? "info" : "warning");
+          location.reload();
+        });
+      }),
+    }, label);
+  }
+
+  const controls = E("div", { class: "xkop-controls" }, [
+    running ? act("restart", _("Перезапустить"), "cbi-button-apply")
+            : act("start", _("Запустить"), "cbi-button-apply"),
+    " ",
+    running ? act("stop", _("Остановить"), "cbi-button-reset") : "",
+    " ",
+    svc.enabled ? act("disable", _("Выключить автозапуск"), "")
+                : act("enable", _("Включить автозапуск"), ""),
+  ]);
+
+  return card(_("Служба"), rows.concat([controls]));
+}
+
 // Пул серверов, а не список пингов. Число «7 из 9 живы» полезнее девяти
 // чисел в миллисекундах; задержки раскрываются по требованию.
 function renderPool(nodes, stats) {
@@ -285,26 +348,28 @@ function renderExplain() {
 }
 
 return L.Class.extend({
+  // Один запуск на всю страницу.
+  //
+  // Раньше их было пять, и два из них ждали сеть: проверки DNS и FakeIP
+  // спрашивают резолвер, а Канарейка вдобавок проверяла подмену и при
+  // изменении выученного перезапускала службу. Открытие страницы не имеет
+  // права ни ждать сеть, ни что-либо перезапускать.
   render: function () {
-    return Promise.all([
-      api.globalCheck(),
-      api.stats(),
-      api.nodes(),
-      api.subscriptions(),
-      api.canary(),
-    ]).then(function (data) {
-      const check = data[0];
-      const stats = data[1];
-      const nodes = data[2];
-      const subs = data[3];
-      const canary = data[4];
+    return api.dashboard().then(function (data) {
+      if (!data || !data.ok) {
+        return E("div", { class: "xkop-dashboard" }, [
+          E("div", { class: "xkop-summary xkop-warn" },
+            _("Роутер не ответил: ") + ((data && data.error) || "?")),
+        ]);
+      }
 
       return E("div", { class: "xkop-dashboard" }, [
-        renderSummary(check),
-        renderDistribution(stats),
-        renderPool(nodes, stats),
-        renderSubscriptions(subs),
-        renderCanary(canary),
+        renderSummary(data),
+        renderService(data),
+        renderDistribution(data.stats),
+        renderPool(data.nodes, data.stats),
+        renderSubscriptions(data.subscriptions),
+        renderCanary(data.canary),
         renderExplain(),
       ]);
     });

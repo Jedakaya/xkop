@@ -35,7 +35,7 @@ check "установщик знает про все библиотеки" "$hav
 
 # То же для точек панели.
 panel_have=$(ls "$ROOT/client-panel/cgi-bin" | sort | tr '\n' ' ' | sed 's/ *$//')
-panel_listed=$(sed -n 's/^ *for endpoint in \(.*\) \\$/\1/p;s/^ *\(routes route-set.*\); do$/\1/p' "$ROOT/install.sh" \
+panel_listed=$(sed -n 's/^PANEL_CGI_FILES="\(.*\)"$/\1/p' "$ROOT/install.sh" \
     | tr ' \n' '\n\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ *$//')
 
 check "установщик знает про все точки панели" "$panel_have" "$panel_listed"
@@ -60,7 +60,7 @@ check "установщик сбрасывает кэш LuCI" "yes" \
 
 # Файлы панели никого не обслуживают сами по себе.
 check "установщик поднимает панель" "yes" \
-    "$(grep -q 'uhttpd.xkop.listen_http' "$ROOT/install.sh" && echo yes || echo no)"
+    "$(grep -q 'listen_http=' "$ROOT/install.sh" && echo yes || echo no)"
 
 # Файл службы без пакета тоже надо привезти: иначе команды есть, а запускать
 # нечем.

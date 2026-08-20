@@ -77,8 +77,6 @@ PKG_SOURCE:=$(XRAY_ASSET).zip
 PKG_SOURCE_URL:=https://github.com/XTLS/Xray-core/releases/download/v$(PKG_VERSION)
 PKG_HASH:=$(XRAY_HASH_$(XRAY_ASSET))
 
-PKGARCH:=$(XKOP_TARGET_ARCH)
-
 include $(INCLUDE_DIR)/package.mk
 
 define Package/xray-xkop
@@ -89,6 +87,11 @@ define Package/xray-xkop
 	DEPENDS:=@!(TARGET_uml)
 	PROVIDES:=xray-core
 	CONFLICTS:=xray-core
+	# Внутри блока, а не снаружи: Package/Default присваивает
+	# PKGARCH:=$$(ARCH_PACKAGES) безусловно и затирает всё, что задано выше
+	# по файлу. Снаружи оно выглядело рабочим, а восемь пакетов уходили
+	# в релиз с arch: x86_64 и на роутере отвергались как «uninstallable».
+	PKGARCH:=$(XKOP_TARGET_ARCH)
 endef
 
 define Package/xray-xkop/description

@@ -158,6 +158,21 @@ canary_run() {
     return 0
 }
 
+# Last known state, without asking the network. The dashboard must never
+# probe: probing costs seconds on every page load, and canary_state_json
+# restarts the service when the learned set changes - a page view has no
+# business restarting anything.
+canary_cached_json() {
+    local out="$XKOP_RUN_DIR/canary.json"
+
+    if [ -s "$out" ]; then
+        jq -c '{ok: true, cached: true} + .' "$out"
+    else
+        jq -nc '{ok: true, cached: true, enabled: true, state: "unknown",
+                 hijacked: false, detected: [], learned: [], changed: false}'
+    fi
+}
+
 canary_state_json() {
     local out="$XKOP_RUN_DIR/canary.json"
 

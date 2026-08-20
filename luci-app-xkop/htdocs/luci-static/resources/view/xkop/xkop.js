@@ -36,15 +36,17 @@ const CSS = `
 `;
 
 return view.extend({
-  handleSaveApply: null,
-
   load: function () {
     return dashboard.render();
   },
 
+  // Обзор — такая же вкладка карты, а не блок, приклеенный сверху.
+  //
+  // Приклеенный сверху блок стоил двух вещей сразу: страница теряла штатный
+  // низ LuCI с «Сохранить и применить» (карта, отрисованная внутрь своего
+  // div, footer'а не получает), и порядок на странице выглядел случайным —
+  // над заголовком настроек висело нечто без объяснения, что это.
   render: function (dashboardView) {
-    const style = E("style", { type: "text/css" }, CSS);
-
     const map = new form.Map(
       "xkop",
       _("xkop"),
@@ -52,17 +54,20 @@ return view.extend({
     );
     map.tabbed = true;
 
+    const overview = map.section(form.NamedSection, "settings", "settings", _("Обзор"));
+    overview.anonymous = true;
+    overview.addremove = false;
+
+    const mount = overview.option(form.DummyValue, "_overview");
+    mount.rawhtml = false;
+    mount.cfgvalue = function () {
+      return dashboardView;
+    };
+
     settings.build(map);
 
-    return map.render().then(function (settingsView) {
-      return E("div", {}, [
-        style,
-        E("div", { class: "cbi-map" }, [
-          E("h2", {}, _("Обзор")),
-          dashboardView,
-        ]),
-        settingsView,
-      ]);
+    return map.render().then(function (rendered) {
+      return E("div", {}, [E("style", { type: "text/css" }, CSS), rendered]);
     });
   },
 });
