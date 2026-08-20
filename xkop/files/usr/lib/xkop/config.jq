@@ -55,11 +55,19 @@ def metrics_section:
 # done any other way: asking the balancer which node it is on, and telling it
 # to stay on one. Bound to the loopback - it is unauthenticated and has no
 # business being reachable from anywhere else.
+# ObservatoryService is listed only when there is an observatory to serve.
+# Asking for a service whose feature is absent makes the engine refuse the
+# whole configuration with "not all dependencies are resolved" - the same trap
+# as a balancer without an observatory, and it shows up exactly when the pool
+# is empty, which is the moment the router most needs to come up.
 def api_section:
     {
         tag: "api",
         listen: "127.0.0.1:\(settings.api_port // 11112)",
-        services: ["RoutingService", "ObservatoryService", "StatsService"]
+        services: (
+            ["RoutingService", "StatsService"]
+            + (if (node_tags | length) > 0 then ["ObservatoryService"] else [] end)
+        )
     };
 
 # Traffic arrives already redirected by nftables, so the inbound only has to
