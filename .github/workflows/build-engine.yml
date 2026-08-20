@@ -19,8 +19,81 @@ permissions:
   packages: read
 
 jobs:
+  # Собран ли уже движок этой версии.
+  #
+  # Тег выпускается на каждую правку скриптов, а версия движка меняется раз
+  # в несколько месяцев — пересобирать из-за этого восемь архитектур значит
+  # десять минут ждать ровно те же файлы. Если пакеты такой версии уже лежат
+  # в каком-то релизе, они переносятся в новый, а сборка пропускается.
+  check:
+    name: Нужна ли сборка
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.look.outputs.version }}
+      have: ${{ steps.look.outputs.have }}
+      source: ${{ steps.look.outputs.source }}
+    steps:
+      - uses: actions/checkout@v5.0.0
+
+      - id: look
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^PKG_VERSION:=//p' xray-xkop/Makefile | head -n 1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Версия движка: $VERSION"
+
+          # Ищем релиз, где такие пакеты уже есть. Сравниваем по имени файла:
+          # в него входит и версия, и архитектура — см. build ниже.
+          SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=20" \
+            --jq "[.[] | select([.assets[].name] | any(startswith(\"xray-xkop-$VERSION-\"))) | .tag_name] | first // empty")
+
+          if [ -n "$SOURCE" ] && [ "$SOURCE" != "$GITHUB_REF_NAME" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+            echo "source=$SOURCE" >> "$GITHUB_OUTPUT"
+            echo "Уже собран в релизе $SOURCE — пересобирать нечего"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "Такой версии в релизах нет, собираю"
+          fi
+
+  # Перенос готовых пакетов в новый релиз.
+  reuse:
+    name: Взять готовые пакеты
+    needs: check
+    if: needs.check.outputs.have == 'true' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p ./release
+          gh release download "${{ needs.check.outputs.source }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "xray-xkop-${{ needs.check.outputs.version }}-*" \
+            --dir ./release
+          ls -l ./release
+
+          # Релиз создаёт сборка пакетов, и она может ещё идти. Приложить файлы
+          # к несуществующему релизу нельзя, поэтому ждём его появления, а
+          # не гадаем, кто успеет первым.
+          for attempt in $(seq 1 60); do
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              break
+            fi
+            echo "релиз $GITHUB_REF_NAME ещё не создан, жду"
+            sleep 20
+          done
+
+          gh release upload "$GITHUB_REF_NAME" ./release/* \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
   engine:
     name: ${{ matrix.arch }}
+    needs: check
+    if: needs.check.outputs.have != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -93,8 +166,8 @@ jobs:
   release:
     name: Выложить в релиз
     runs-on: ubuntu-latest
-    needs: engine
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [check, engine]
+    if: needs.check.outputs.have != 'true' && startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all architectures
         uses: actions/download-artifact@v4
