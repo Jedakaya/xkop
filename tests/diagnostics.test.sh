@@ -86,7 +86,7 @@ diag_nft_json() { echo '{"ok":true,"rules_present":true,"packets_seen":10}'; }
 diag_dns_json() { echo '{"ok":true,"answered":true}'; }
 diag_fakeip_json() { echo '{"ok":true,"mode":"off"}'; }
 lists_present() { return 0; }
-cmd_subscriptions() { echo '[{"state":"ready","reason":null}]'; }
+cmd_subscriptions() { echo '[{"state":"ready","reason":null,"servers":5}]'; }
 cmd_check_engine() { echo '{"engine_installed":true}'; }
 service_status_json() { echo '{"engine":{"running":true,"answering":true},"nodes":5}'; }
 
@@ -102,10 +102,10 @@ check "запущен, но не отвечает — это отдельная 
 
 service_status_json() { echo '{"engine":{"running":true,"answering":true},"nodes":5}'; }
 cmd_subscriptions() { echo '[{"state":"blocked","reason":"hwid_limit"}]'; }
-check "причина берётся у подписки, а не выдумывается" "подписки не готовы: hwid_limit" \
+check "причина берётся у подписки, а не выдумывается" "подписок нет серверов: hwid_limit" \
     "$(diag_global_json | jq -r '.summary')"
 
-cmd_subscriptions() { echo '[{"state":"ready","reason":null}]'; }
+cmd_subscriptions() { echo '[{"state":"ready","reason":null,"servers":5}]'; }
 service_status_json() { echo '{"engine":{"running":true,"answering":true},"nodes":0}'; }
 check "без узлов трафик идёт напрямую" "узлов нет, трафик идёт напрямую" \
     "$(diag_global_json | jq -r '.summary')"
@@ -115,6 +115,16 @@ lists_present() { return 1; }
 check "без списков правила по спискам не сработают" \
     "списков доменов нет, правила по спискам не сработают" \
     "$(diag_global_json | jq -r '.summary')"
+
+# Неудачное обновление не поломка.
+#
+# Кэш при нём остаётся нетронутым, серверы на месте, трафик идёт. Сводка
+# называла это «подписки не готовы» — то есть пугала поломкой, которой нет.
+cmd_subscriptions() { echo '[{"state":"stale","reason":"download_failed","servers":5}]'; }
+check "устаревшая подписка с серверами — не поломка" "работает на кэше, обновление подписки не прошло: download_failed"     "$(diag_global_json | jq -r '.summary')"
+
+cmd_subscriptions() { echo '[{"state":"stale","reason":"download_failed","servers":0}]'; }
+check "а вот без серверов — сказано прямо" "подписок нет серверов: download_failed"     "$(diag_global_json | jq -r '.summary')"
 
 echo "$((total - failed))/$total"
 

@@ -253,9 +253,20 @@ diag_global_json() {
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
                 elif ($nft.rules_present | not) then $nft.state
+                # «Не готовы» — это когда серверов нет вовсе.
+                #
+                # Неудачное обновление оставляет кэш нетронутым и переводит
+                # подписку в «устаревает»: серверы на месте, трафик идёт,
+                # чинить нечего. Называть это «подписки не готовы» значит
+                # пугать человека поломкой, которой нет, — что и случилось
+                # на живом роутере, пока сеть задыхалась.
+                elif ([$subscriptions[] | .servers // 0] | add // 0) == 0
+                     and ($subscriptions | length) > 0 then
+                    "подписок нет серверов: " + ([$subscriptions[] | .reason // .state] | join(", "))
                 elif ([$subscriptions[] | select(.state == "ready")] | length) == 0
                      and ($subscriptions | length) > 0 then
-                    "подписки не готовы: " + ([$subscriptions[] | .reason // .state] | join(", "))
+                    "работает на кэше, обновление подписки не прошло: "
+                    + ([$subscriptions[] | .reason // .state] | join(", "))
                 elif ($status.nodes == 0) then "узлов нет, трафик идёт напрямую"
                 elif ($lists | not) then "списков доменов нет, правила по спискам не сработают"
                 else "работает"
@@ -347,9 +358,20 @@ diag_dashboard_json() {
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
                 elif ($nft.rules_present | not) then $nft.state
+                # «Не готовы» — это когда серверов нет вовсе.
+                #
+                # Неудачное обновление оставляет кэш нетронутым и переводит
+                # подписку в «устаревает»: серверы на месте, трафик идёт,
+                # чинить нечего. Называть это «подписки не готовы» значит
+                # пугать человека поломкой, которой нет, — что и случилось
+                # на живом роутере, пока сеть задыхалась.
+                elif ([$subscriptions[] | .servers // 0] | add // 0) == 0
+                     and ($subscriptions | length) > 0 then
+                    "подписок нет серверов: " + ([$subscriptions[] | .reason // .state] | join(", "))
                 elif ([$subscriptions[] | select(.state == "ready")] | length) == 0
                      and ($subscriptions | length) > 0 then
-                    "подписки не готовы: " + ([$subscriptions[] | .reason // .state] | join(", "))
+                    "работает на кэше, обновление подписки не прошло: "
+                    + ([$subscriptions[] | .reason // .state] | join(", "))
                 elif ($status.nodes == 0) then "узлов нет, трафик идёт напрямую"
                 elif ($lists | not) then "списков доменов нет, правила по спискам не сработают"
                 else "работает"
