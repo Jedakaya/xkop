@@ -1,0 +1,73 @@
+name: Build engine
+
+# Пакет с движком меняется только когда поднимается его версия — раз в
+# несколько месяцев. Поэтому отдельный workflow и отдельная кнопка: правка
+# скрипта не должна пересобирать одиннадцать пакетов.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'xray-xkop/**'
+      - 'Dockerfile-engine'
+      - '.github/workflows/build-engine.yml'
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  engine:
+    name: ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Архитектуры парка и соседние. Собираются из одного SDK: пакет несёт
+        # готовый бинарник, и с роутером должно совпасть описание, а не
+        # тулчейн, который его завернул.
+        arch:
+          - aarch64_cortex-a53
+          - aarch64_cortex-a72
+          - aarch64_generic
+          - arm_cortex-a7_neon-vfpv4
+          - arm_cortex-a9_neon
+          - mipsel_24kc
+          - mips_24kc
+          - x86_64
+    steps:
+      - uses: actions/checkout@v5.0.0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Build package
+        uses: docker/build-push-action@v6.18.0
+        with:
+          file: ./Dockerfile-engine
+          context: .
+          target: artifacts
+          outputs: type=local,dest=./bin/${{ matrix.arch }}
+          build-args: |
+            XKOP_TARGET_ARCH=${{ matrix.arch }}
+            SDK_IMAGE=ghcr.io/${{ steps.owner.outputs.name }}/xkop-sdk-apk:25.12.0
+
+      - name: Check output
+        run: |
+          ls -l ./bin/${{ matrix.arch }}
+          [ -n "$(ls -A ./bin/${{ matrix.arch }})" ] || { echo "пакет не собрался"; exit 1; }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: xray-xkop-${{ matrix.arch }}
+          path: ./bin/${{ matrix.arch }}/*
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,23 @@
+# Build of the engine package for one architecture.
+#
+# One SDK, many architectures: the package carries a prebuilt binary, so what
+# has to match the router is the metadata, not the toolchain. The architecture
+# is passed in and the Makefile picks the matching XTLS asset by it.
+ARG SDK_IMAGE=ghcr.io/jedakaya/xkop-sdk-apk:25.12.0
+FROM ${SDK_IMAGE} AS build
+
+ARG XKOP_TARGET_ARCH=x86_64
+ENV XKOP_TARGET_ARCH=${XKOP_TARGET_ARCH}
+
+WORKDIR /builder
+
+COPY ./xray-xkop /builder/package/feeds/utilities/xray-xkop
+
+RUN make defconfig \
+    && make package/xray-xkop/compile -j1 V=s XKOP_TARGET_ARCH=${XKOP_TARGET_ARCH}
+
+RUN mkdir -p /builder/out \
+    && find /builder/bin -name 'xray-xkop*' -exec cp {} /builder/out/ ';'
+
+FROM scratch AS artifacts
+COPY --from=build /builder/out/ /
