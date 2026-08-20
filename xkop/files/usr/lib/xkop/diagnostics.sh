@@ -317,6 +317,7 @@ diag_dashboard_json() {
         --argjson nft "$(diag_nft_json)" \
         --argjson subscriptions "$(cmd_subscriptions)" \
         --argjson lists "$(lists_present && echo true || echo false)" \
+        --argjson lists_status "$(lists_status_json)" \
         --argjson stats "$stats" \
         --argjson nodes "$(nodes_json "$pool" "$stats")" \
         --argjson canary "$(canary_cached_json)" \
@@ -334,6 +335,7 @@ diag_dashboard_json() {
             nft: $nft,
             subscriptions: $subscriptions,
             lists_present: $lists,
+            lists: $lists_status,
             stats: $stats,
             nodes: $nodes,
             canary: $canary

@@ -61,6 +61,54 @@ function kb(value) {
   return api.bytes((Number(value) || 0) * 1024);
 }
 
+// Когда это было, словами. Точное время тут никому не нужно, а «два дня
+// назад» отвечает на вопрос сразу.
+function when(ts) {
+  const secs = Math.floor(Date.now() / 1000) - Number(ts || 0);
+  if (!ts || secs < 0) return "";
+  if (secs < 3600) return Math.max(1, Math.floor(secs / 60)) + _(" мин назад");
+  if (secs < 86400) return Math.floor(secs / 3600) + _(" ч назад");
+  return Math.floor(secs / 86400) + _(" дн назад");
+}
+
+// Списки: скачались ли, все ли и когда.
+//
+// «Списки есть» отвечало на другой вопрос. Категория, выбранная в профиле,
+// но не приехавшая, — это сайты, которые молча идут мимо туннеля, и заметить
+// это иначе нечем: маршрутизация при этом выглядит настроенной.
+function renderLists(lists) {
+  if (!lists || !lists.ok) return "";
+
+  const g = lists.geosite || {};
+  const subs = lists.subnets || [];
+  const missing = lists.missing || [];
+
+  const rows = [
+    line(_("имена"), g.present ? api.bytes(g.size_bytes) : _("нет"),
+      g.updated ? when(g.updated) : ""),
+  ];
+
+  subs.forEach(function (s) {
+    rows.push(line(s.category,
+      s.ready ? s.subnets + _(" подсетей") : _("не приехали"),
+      s.updated ? when(s.updated) : ""));
+  });
+
+  if (!subs.length && (lists.categories || []).length) {
+    rows.push(E("div", { class: "xkop-note" },
+      _("У выбранных категорий своих подсетей нет — они целиком по именам.")));
+  }
+
+  if (missing.length) {
+    rows.push(E("div", { class: "xkop-warn-text" },
+      _("Не скачано: ") + missing.join(", ")));
+    rows.push(E("div", { class: "xkop-note" },
+      _("Эти сервисы живут на адресах, и без подсетей их трафик идёт мимо туннеля.")));
+  }
+
+  return card(_("Списки"), rows);
+}
+
 // Одна строка сверху: работает, работает с оговорками, не работает. С
 // причиной, а не с пятью зелёными галочками, которые пользователь должен
 // истолковать сам.
@@ -611,6 +659,11 @@ return L.Class.extend({
         Math.round(((data.system || {}).storage || {}).memory_free_kb / 1024 / 16)]),
         function () { return renderRouterWidget(data); });
 
+      fill("lists", key([(data.lists || {}).missing,
+        ((data.lists || {}).subnets || []).map(function (x) { return [x.category, x.subnets]; }),
+        ((data.lists || {}).geosite || {}).updated]),
+        function () { return renderLists(data.lists); });
+
       fill("pool", key([(data.nodes || {}).selected, (data.nodes || {}).selection,
         ((data.nodes || {}).nodes || []).map(function (n) {
           return [n.tag, n.state, n.delay_ms, n.probes];
@@ -642,6 +695,7 @@ return L.Class.extend({
         slots[name] = { box: box, sig: null };
         widgets.appendChild(box);
       });
+      slot("lists");
       slot("pool");
       slot("subs");
       slot("canary");
