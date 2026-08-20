@@ -48,6 +48,27 @@ diag_storage() {
           memory_total_kb: $mem_total, memory_free_kb: $mem_free}'
 }
 
+# Uptime in words. /proc/uptime is seconds with a fraction, and busybox has no
+# tool that turns it into something a person reads.
+diag_uptime() {
+    local secs days hours mins
+
+    secs=$(awk '{printf "%d", $1}' /proc/uptime 2> /dev/null)
+    [ -n "$secs" ] || return 0
+
+    days=$((secs / 86400))
+    hours=$(((secs % 86400) / 3600))
+    mins=$(((secs % 3600) / 60))
+
+    if [ "$days" -gt 0 ]; then
+        printf '%dд %dч' "$days" "$hours"
+    elif [ "$hours" -gt 0 ]; then
+        printf '%dч %dм' "$hours" "$mins"
+    else
+        printf '%dм' "$mins"
+    fi
+}
+
 diag_system_json() {
     jq -nc \
         --argjson router "$(diag_router_info)" \
@@ -237,11 +258,14 @@ diag_dashboard_json() {
         --argjson stats "$(cmd_stats)" \
         --argjson nodes "$(nodes_json)" \
         --argjson canary "$(canary_cached_json)" \
+        --argjson system "$(diag_system_json)" \
+        --arg uptime "$(diag_uptime)" \
         --arg version "${XKOP_VERSION:-}" \
         '
         {
             ok: true,
             version: $version,
+            system: ($system + {uptime: $uptime}),
             service: $status,
             engine: $engine,
             nft: $nft,
