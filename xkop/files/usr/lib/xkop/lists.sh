@@ -120,6 +120,11 @@ lists_subnet_fetch() {
         return 1
     fi
 
+    if [ -s "$target" ] && cmp -s "$tmp" "$target"; then
+        rm -f "$tmp"
+        return 3
+    fi
+
     mv "$tmp" "$target"
     return 0
 }
@@ -133,17 +138,24 @@ lists_subnet_entries() {
 }
 
 # Обновление подсетей всех категорий, упомянутых хоть в одном профиле.
+#
+# Возвращает 0, если что-то действительно изменилось, и 2, если всё осталось
+# как было. По этому вызывающий и решает, пересобирать ли конфигурацию:
+# перезапускать службу ради того же самого файла значит рвать соединения
+# ни за чем.
 lists_subnets_update() {
-    local profile category
-    command -v uci > /dev/null 2>&1 || return 0
+    local profile category changed=0
+    command -v uci > /dev/null 2>&1 || return 2
 
     for profile in $(uci -q show "$XKOP_CONFIG" 2> /dev/null \
         | sed -n "s/^$XKOP_CONFIG\.\([^.]*\)=profile$/\1/p"); do
         for category in $(uci -q get "$XKOP_CONFIG.$profile.community_list" 2> /dev/null); do
-            lists_subnet_fetch "$category"
+            lists_subnet_fetch "$category" && changed=1
         done
     done
-    return 0
+
+    [ "$changed" -eq 1 ] && return 0
+    return 2
 }
 
 lists_present() {

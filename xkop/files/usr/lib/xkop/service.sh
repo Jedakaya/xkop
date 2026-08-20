@@ -107,8 +107,40 @@ engine_version_cached() {
     [ -n "$bin" ] || return 0
 
     cache="$XKOP_RUN_DIR/engine-version"
-    stamp=$(date -r "$bin" +%s 2> /dev/null)
-    [ -n "$stamp" ] || stamp=0
+
+    # Отметка файла, по которой узнаётся, что движок сменился.
+    #
+    # `date -r` есть не во всякой сборке busybox — это записано у нас же,
+    # в install.sh, и я это благополучно не учёл. Когда его нет, отметка
+    # выходит пустой, ключ совпадает всегда, и кэш отдаёт старую версию
+    # вечно: пакет обновился, а интерфейс показывает прежнюю.
+    #
+    # Поэтому отметка собирается из трёх источников, и если не вышло ни одним,
+    # кэш не используется вовсе. Лишний запуск движка дешевле неправды.
+    local mtime size
+    mtime=$(date -r "$bin" +%s 2> /dev/null)
+    case "$mtime" in
+        '' | *[!0-9]*) mtime=$(find "$bin" -maxdepth 0 -printf '%T@' 2> /dev/null | cut -d. -f1) ;;
+    esac
+    case "$mtime" in
+        '' | *[!0-9]*) mtime=0 ;;
+    esac
+
+    size=$(wc -c < "$bin" 2> /dev/null | tr -d ' ')
+    case "$size" in
+        '' | *[!0-9]*) size=0 ;;
+    esac
+
+    # Ни времени, ни размера — запоминать нечего, спрашиваем движок каждый раз.
+    # Лишний запуск дешевле неправды.
+    if [ "$mtime" = "0" ] && [ "$size" = "0" ]; then
+        "$bin" version 2> /dev/null | head -n 1 | awk '{print $2}'
+        return 0
+    fi
+
+    # Время И размер: подмена в ту же секунду временем не ловится, а размером
+    # ловится, и наоборот.
+    stamp="$mtime-$size"
 
     saved=$(cat "$cache" 2> /dev/null)
     case "$saved" in
@@ -267,7 +299,7 @@ lists_refresh_background() {
     (
         trap 'rm -f "$pidfile"' EXIT INT TERM
         sleep 20
-        if lists_subnets_update_changed; then
+        if lists_subnets_update; then
             log_info "состав подсетей изменился, пересобираю конфигурацию"
             config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
         fi
