@@ -520,8 +520,29 @@ def assign_tags:
     )
     | .servers;
 
+# Keyword filters from the subscription section. Case is ignored: a provider
+# writes "Info" today and "INFO" tomorrow, and a filter that notices the
+# difference silently stops filtering.
+#
+# Passed through $ARGS.named rather than as declared arguments, so callers that
+# do not filter need not know these exist.
+def keywords($raw):
+    ($raw // "") | ascii_downcase | split(" ") | map(select(. != ""));
+
+def apply_filters:
+    keywords($ARGS.named.include) as $include
+    | keywords($ARGS.named.exclude) as $exclude
+    | map(
+        (.tag // "" | ascii_downcase) as $tag
+        | select(
+            (($include | length) == 0 or any($include[]; . as $k | $tag | contains($k)))
+            and (($exclude | length) == 0 or all($exclude[]; . as $k | ($tag | contains($k)) | not))
+        )
+      );
+
 def merge:
     add
+    | apply_filters
     | dedupe
     | sort_by(.subscription, .tag, (.key | tojson))
     | assign_tags;

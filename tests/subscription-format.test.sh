@@ -38,6 +38,15 @@ check "список ссылок в url-safe без добивки" "link-list" 
     "$(subscription_detect_format "$FIXTURES/link-list-urlsafe.txt")"
 check "мусор" "unknown" "$(subscription_detect_format "$FIXTURES/junk.txt")"
 
+# Конфигурация sing-box — тоже объект с массивом outbounds, и без отдельной
+# проверки она сошла бы за конфигурацию Xray. Проверено на живой панели:
+# по User-Agent клиента sing-box приходит именно это, и подписка выглядела бы
+# пустой вместо честного «формат не тот».
+check "конфигурация sing-box опознана отдельно" "sing-box-json" \
+    "$(subscription_detect_format "$FIXTURES/sing-box.json")"
+check "из конфигурации sing-box серверов не берём" "0" \
+    "$(subscription_count_servers "$FIXTURES/sing-box.json" sing-box-json)"
+
 : > "$work/empty"
 check "пустой файл" "unknown" "$(subscription_detect_format "$work/empty")"
 

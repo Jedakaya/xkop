@@ -1,0 +1,19 @@
+{
+  "log": {"level": "warn"},
+  "dns": {"servers": [{"tag": "remote", "address": "https://1.1.1.1/dns-query"}]},
+  "inbounds": [{"type": "tun", "tag": "tun-in"}],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "NL-Amsterdam-2",
+      "server": "nl2.example.com",
+      "server_port": 443,
+      "uuid": "8f1c9a54-0b21-4c7e-9a3d-2f5e6b7c8d90",
+      "tls": {"enabled": true, "server_name": "www.microsoft.com", "reality": {"enabled": true}}
+    },
+    {"type": "direct", "tag": "direct"},
+    {"type": "block", "tag": "block"}
+  ],
+  "route": {"rules": [{"protocol": "dns", "outbound": "dns-out"}]},
+  "experimental": {"clash_api": {"external_controller": "127.0.0.1:9090"}}
+}
