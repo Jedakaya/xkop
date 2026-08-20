@@ -40,5 +40,11 @@ fi
 # "dev" is better than shipping the placeholder into the interface.
 ssh "$TARGET" 'chmod +x /usr/bin/xkop /etc/init.d/xkop && sed -i "s/__COMPILED_VERSION_VARIABLE__/dev/" /usr/lib/xkop/constants.sh'
 
+echo "-- панель клиента"
+ssh "$TARGET" 'mkdir -p /www-xkop/cgi-bin'
+scp -q "$ROOT"/client-panel/index.html "$TARGET:/www-xkop/index.html"
+scp -q "$ROOT"/client-panel/cgi-bin/* "$TARGET:/www-xkop/cgi-bin/"
+ssh "$TARGET" 'chmod +x /www-xkop/cgi-bin/*'
+
 echo "-- проверка:"
 ssh "$TARGET" 'xkop version'

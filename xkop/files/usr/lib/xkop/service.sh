@@ -127,6 +127,10 @@ service_prepare() {
 
     dnsmasq_protection
 
+    # Панель отдаётся, только если её файлы на месте: пакет её не несёт,
+    # её кладёт установщик или выкладка со стенда.
+    panel_present && panel_configure_uhttpd
+
     return 0
 }
 
@@ -195,4 +199,37 @@ service_status_json() {
                 end
             )
         }'
+}
+
+# Панель конечного пользователя: отдельный экземпляр uhttpd на своём порту.
+# Основной интерфейс роутера при этом не трогается — на нём живёт LuCI,
+# и делить с ним настройки значит однажды уронить оба.
+panel_configure_uhttpd() {
+    command -v uci > /dev/null 2>&1 || return 1
+    [ -f /etc/init.d/uhttpd ] || return 1
+    [ -s "$XKOP_PANEL_ROOT/index.html" ] || return 1
+
+    uci -q delete "uhttpd.$XKOP_PANEL_SECTION"
+    uci -q set "uhttpd.$XKOP_PANEL_SECTION=uhttpd"
+    uci -q add_list "uhttpd.$XKOP_PANEL_SECTION.listen_http=0.0.0.0:$XKOP_PANEL_PORT"
+    uci -q set "uhttpd.$XKOP_PANEL_SECTION.home=$XKOP_PANEL_ROOT"
+    uci -q set "uhttpd.$XKOP_PANEL_SECTION.cgi_prefix=/cgi-bin"
+    uci -q set "uhttpd.$XKOP_PANEL_SECTION.index_page=index.html"
+    uci -q set "uhttpd.$XKOP_PANEL_SECTION.script_timeout=60"
+    uci -q set "uhttpd.$XKOP_PANEL_SECTION.network_timeout=30"
+    uci -q commit uhttpd
+
+    /etc/init.d/uhttpd restart > /dev/null 2>&1
+    log_info "панель клиента отдаётся на порту $XKOP_PANEL_PORT"
+}
+
+panel_remove_uhttpd() {
+    uci -q get "uhttpd.$XKOP_PANEL_SECTION" > /dev/null 2>&1 || return 0
+    uci -q delete "uhttpd.$XKOP_PANEL_SECTION"
+    uci -q commit uhttpd
+    /etc/init.d/uhttpd restart > /dev/null 2>&1
+}
+
+panel_present() {
+    [ -s "$XKOP_PANEL_ROOT/index.html" ] && [ -x "$XKOP_PANEL_ROOT/cgi-bin/status" ]
 }

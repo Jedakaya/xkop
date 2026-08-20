@@ -150,14 +150,27 @@ say "файлы xkop"
 # Downloaded to /tmp first and only then installed: a half-finished download
 # must not be able to leave the router with half a command.
 fetch_repo_file "xkop/files/usr/bin/xkop" "$WORK/xkop" || die "не удалось скачать xkop"
-for lib in constants.sh stats.sh stats.jq subscription.sh subscription.jq version.sh; do
-    fetch_repo_file "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" || die "не удалось скачать $lib"
+
+# Список библиотек полный и обязательный: /usr/bin/xkop подключает их все,
+# и недостающая означает не «без одной возможности», а команду, которая
+# не запускается вовсе. Полнота списка проверяется в tests/installer.test.sh.
+XKOP_LIBS="constants.sh logging.sh version.sh stats.sh stats.jq
+subscription.sh subscription.jq config.sh config.jq lists.sh userlists.sh
+nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh service.sh"
+
+for lib in $XKOP_LIBS; do
+    fetch_repo_file "xkop/files/usr/lib/xkop/$lib" "$WORK/lib/$lib" \
+        || die "не удалось скачать $lib"
 done
+
+fetch_repo_file "xkop/files/etc/init.d/xkop" "$WORK/init.d-xkop" \
+    || die "не удалось скачать файл службы"
 
 mkdir -p "$XKOP_LIB_DIR"
 cp "$WORK"/lib/* "$XKOP_LIB_DIR/"
 cp "$WORK/xkop" /usr/bin/xkop
-chmod +x /usr/bin/xkop
+cp "$WORK/init.d-xkop" /etc/init.d/xkop
+chmod +x /usr/bin/xkop /etc/init.d/xkop
 
 # The package build substitutes the version; an install from the branch stamps
 # the commit, so a router can always say what exactly is running on it.
@@ -179,6 +192,26 @@ if [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
     fi
 fi
 
+say "панель клиента"
+# Панель — обычные файлы, а не пакет: её отдаёт отдельный экземпляр uhttpd,
+# и обновляется она вместе со скриптами, без тега и пересборки.
+mkdir -p /www-xkop/cgi-bin
+if fetch_repo_file "client-panel/index.html" "$WORK/index.html"; then
+    cp "$WORK/index.html" /www-xkop/index.html
+    for endpoint in _common auth status subscription-set subscription-update \
+                    routes route-set node-select explain; do
+        if fetch_repo_file "client-panel/cgi-bin/$endpoint" "$WORK/$endpoint"; then
+            cp "$WORK/$endpoint" "/www-xkop/cgi-bin/$endpoint"
+            chmod +x "/www-xkop/cgi-bin/$endpoint"
+        else
+            echo "!! не скачалась точка панели: $endpoint"
+        fi
+    done
+    echo "-- панель в /www-xkop, порт 8090"
+else
+    echo "!! панель не скачалась, xkop это переживёт"
+fi
+
 say "конфигурация для проверки метрик"
 if fetch_repo_file "tools/xray-stats-test.json" /tmp/xray-stats-test.json; then
     echo "-- /tmp/xray-stats-test.json"
@@ -198,9 +231,19 @@ cat << 'EOF'
 
 == дальше
 
+  uci set xkop.main.url='https://ваша-ссылка' && uci commit xkop
+  /etc/init.d/xkop enable && /etc/init.d/xkop start
+
+  xkop get_status
+  xkop stats
+
+Панель клиента — http://адрес-роутера:8090, вход по паролю роутера.
+Настройки целиком — в LuCI, раздел «Сервисы → xkop».
+
+Проверить движок отдельно, без обвязки:
+
   xray run -c /tmp/xray-stats-test.json &
   xkop stats
 
-Ожидается ok=true, нулевое распределение и узел direct в состоянии pending.
-Через минуту он должен стать alive с задержкой. Остальное — в docs/build.md.
+Остальное — в docs/build.md.
 EOF

@@ -62,3 +62,10 @@ XKOP_ACCESS_LOG_MAX_KB='2048'
 # Loopback-only socks inbound used by the explain command to ask the engine
 # what it would do with a name, by actually making it do it.
 XKOP_PROBE_PORT='10809'
+
+# Client panel. The port is deliberately not podkop's 8080: a router migrated
+# from it may still have that one taken, and two panels answering on the same
+# port is a confusion nobody needs while debugging.
+XKOP_PANEL_ROOT='/www-xkop'
+XKOP_PANEL_PORT='8090'
+XKOP_PANEL_SECTION='xkop_panel'
