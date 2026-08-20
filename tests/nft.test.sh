@@ -57,7 +57,7 @@ check "метка ставится нашей" "yes" "$(has "$simple" "meta mark
 check "tcp уходит в движок" "yes" \
     "$(has "$simple" "tproxy ip to $XKOP_TPROXY_ADDRESS:$XKOP_TPROXY_PORT")"
 check "разметка и разворот разведены по цепочкам" "yes" \
-    "$(has "$simple" 'chain divert')"
+    "$(has "$simple" 'chain proxy')"
 
 # Приоритеты: разметка должна случиться раньше разворота, иначе метку некому
 # будет увидеть.
@@ -68,8 +68,8 @@ check "разметка раньше разворота" "yes" \
 
 # Свой трафик роутера к поддельному адресу правила клиентов не видят: он не
 # маршрутизируется, он здесь рождается.
-check "без fakeip своей цепочки нет" "no" "$(has "$simple" 'chain output')"
-check "в режиме fakeip цепочка появляется" "yes" "$(has "$fake" 'chain output')"
+check "без fakeip своей цепочки нет" "no" "$(has "$simple" 'chain mangle_output')"
+check "в режиме fakeip цепочка появляется" "yes" "$(has "$fake" 'chain mangle_output')"
 check "поддельный диапазон метится" "yes" "$(has "$fake" "ip daddr $XKOP_FAKEIP_RANGE")"
 check "уже помеченное не метится повторно" "yes"     "$(has "$fake" "meta mark & $XKOP_NFT_MARK == $XKOP_NFT_MARK return")"
 
@@ -84,6 +84,13 @@ check "с настройкой NTP уходит мимо" "yes" "$(has "$ntp" 'u
 ntp_line=$(printf '%s' "$ntp" | grep -n 'udp dport 123 return' | cut -d: -f1)
 mark_line=$(printf '%s' "$ntp" | grep -n 'meta mark set' | head -n 1 | cut -d: -f1)
 check "выпуск NTP раньше разметки" "yes"     "$([ "$ntp_line" -lt "$mark_line" ] && echo yes || echo no)"
+
+# Имена цепочек — не вкусовщина. «mark» и «output» — ключевые слова грамматики
+# nft, и цепочка с таким именем валит разбор на самом объявлении. Файл
+# применяется целиком, поэтому одна такая строка уносит весь набор: роутер
+# остаётся вовсе без правил. Именно на этом xkop не работал на железе.
+check "цепочка разметки не названа ключевым словом" "no" "$(has "$simple" 'chain mark ')"
+check "цепочка вывода не названа ключевым словом" "no" "$(has "$fake" 'chain output ')"
 
 echo "$((total - failed))/$total"
 

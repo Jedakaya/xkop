@@ -17,6 +17,14 @@
 # The whole ruleset is applied as one file. nft swaps it in atomically, so
 # there is no moment where half the rules are live - which is the moment a
 # router loses its network and someone has to drive to it.
+#
+# The chains are called mangle, mangle_output and proxy, the same names podkop
+# uses, and that is not a matter of taste: "mark" and "output" are keywords in
+# the nft grammar, and a chain named after one of them makes the parser fail on
+# the declaration itself. Because the file is applied whole, that single line
+# takes the entire ruleset with it - the router ends up with no rules at all
+# and nothing to point at, since the error names a chain that looks perfectly
+# ordinary.
 
 nft_ruleset() {
     local interfaces="$1" excluded="$2" fakeip="${3:-0}" exclude_ntp="${4:-0}"
@@ -69,7 +77,7 @@ cat << EXCLUDED
 EXCLUDED
 fi)
 
-    chain mark {
+    chain mangle {
         type filter hook prerouting priority -150; policy accept;
 
         iifname != @interfaces return
@@ -93,7 +101,7 @@ cat << FAKEIP
     # Traffic the router itself starts towards a fake address. The client
     # rules above never see it - it is not routed, it is generated here - and
     # without this the router cannot reach a name it faked for itself.
-    chain output {
+    chain mangle_output {
         type route hook output priority -150; policy accept;
 
         ip daddr @local4 return
@@ -103,7 +111,7 @@ cat << FAKEIP
 FAKEIP
 fi)
 
-    chain divert {
+    chain proxy {
         type filter hook prerouting priority -100; policy accept;
 
         meta mark & $XKOP_NFT_MARK == $XKOP_NFT_MARK meta l4proto tcp \
