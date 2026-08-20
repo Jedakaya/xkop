@@ -152,8 +152,27 @@ def routed_domains:
         | profile_domains(.profile)[]
     ];
 
+# The resolver address as the engine wants it.
+#
+# dns_type existed in the configuration and in the interface, and nothing read
+# it: whatever was chosen, the address went to the engine as typed. A setting
+# that does nothing is worse than a missing one - it is believed.
+#
+# A scheme already typed by hand wins: someone who wrote "https+local://..."
+# means it, and second-guessing that would silently change what they asked for.
+def resolver_address($raw):
+    ($raw // "8.8.8.8") as $s
+    | (settings.dns_type // "doh") as $t
+    | if ($s | index("://")) != null then $s
+      elif $t == "udp" then $s
+      elif $t == "tcp" then "tcp://" + $s
+      elif $t == "dot" then "tls://" + $s
+      elif $t == "quic" then "quic://" + $s
+      else "https://" + (if ($s | index("/")) != null then $s else $s + "/dns-query" end)
+      end;
+
 def dns_servers:
-    (settings.dns_server // "1.1.1.1") as $primary
+    resolver_address(settings.dns_server) as $primary
     | (settings.canary_learned // []) as $learned
     | (if fakeip_enabled and ((routed_domains | length) > 0) then
         [ {address: "fakedns", domains: routed_domains} ]

@@ -2,6 +2,7 @@
 "require view";
 "require form";
 "require ui";
+"require uci";
 "require view.xkop.dashboard as dashboard";
 "require view.xkop.settings as settings";
 
@@ -29,9 +30,10 @@ const CSS = `
 .xkop-warn-text { color: #e03131; font-weight: bold; }
 
 .xkop-widgets { display: grid; gap: 1em;
-  grid-template-columns: repeat(auto-fit, minmax(15em, 1fr)); }
+  grid-template-columns: repeat(auto-fit, minmax(21em, 1fr));
+  align-items: start; }
 .xkop-widget { border: 1px solid rgba(128,128,128,.3); border-radius: 6px;
-  padding: .8em 1em; display: flex; flex-direction: column; }
+  padding: .9em 1.1em; display: flex; flex-direction: column; }
 .xkop-widget-title { text-transform: uppercase; font-size: .75em;
   letter-spacing: .08em; opacity: .6; margin-bottom: .5em; }
 .xkop-widget-body { display: flex; flex-direction: column; gap: .1em; }
@@ -56,10 +58,14 @@ const CSS = `
 
 .xkop-card { border: 1px solid rgba(128,128,128,.3); border-radius: 6px; padding: .8em 1em; }
 .xkop-card h3 { margin: 0 0 .6em 0; font-size: 1.05em; }
-.xkop-line { display: flex; gap: .8em; align-items: baseline; padding: .15em 0; }
-.xkop-label { min-width: 10em; opacity: .75; }
-.xkop-value { font-weight: bold; }
-.xkop-hint { opacity: .6; font-size: .9em; }
+/* Значение не переносится посреди себя: «168.4 МБ» в две строки читается
+   как две разные цифры. Подпись жмётся, значение — нет. */
+.xkop-line { display: flex; gap: .8em; align-items: baseline;
+  padding: .25em 0; flex-wrap: wrap; }
+.xkop-label { flex: 1 1 auto; min-width: 7em; opacity: .75; }
+.xkop-value { font-weight: bold; white-space: nowrap; }
+.xkop-hint { opacity: .6; font-size: .9em; white-space: nowrap; }
+.xkop-hint-wrap { opacity: .6; font-size: .9em; }
 .xkop-note { opacity: .7; font-size: .9em; margin-top: .4em; }
 .xkop-empty { opacity: .6; }
 .xkop-sub { padding: .4em 0; border-bottom: 1px solid rgba(128,128,128,.15); }
@@ -75,8 +81,12 @@ const CSS = `
 `;
 
 return view.extend({
+  // uci грузится здесь, а не в форме: списки профилей и каналов строятся
+  // на этапе сборки секций, до того как карта успевает загрузиться сама.
+  // Без этого «Привязки» оставались двумя полями, куда надо угадать имя.
   load: function () {
-    return dashboard.render();
+    return Promise.all([uci.load("xkop"), dashboard.render()])
+      .then(function (r) { return r[1]; });
   },
 
   // Обзор — такая же вкладка карты, а не блок, приклеенный сверху.
@@ -93,7 +103,13 @@ return view.extend({
     );
     map.tabbed = true;
 
-    const overview = map.section(form.NamedSection, "settings", "settings", _("Обзор"));
+    // Тип секции здесь не совпадает с типом в uci намеренно. LuCI группирует
+    // вкладки по data-tab, а туда кладётся именно sectiontype (form.js: 2485).
+    // Три секции с типом settings — это одна вкладка на три: выбираешь «Обзор»,
+    // подсвечиваются заодно DNS и «Система», и содержимое валится вперемешку.
+    // Запись при этом идёт по имени секции, а оно у всех прежнее — settings,
+    // так что схема uci не меняется и переносить ничего не надо.
+    const overview = map.section(form.NamedSection, "settings", "overview", _("Обзор"));
     overview.anonymous = true;
     overview.addremove = false;
 

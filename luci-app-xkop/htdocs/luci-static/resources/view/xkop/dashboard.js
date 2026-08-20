@@ -251,9 +251,10 @@ function renderPool(nodes, refresh) {
   const states = {
     alive: _("жив"),
     dead: _("мёртв"),
-    pending: _("проверяется"),
+    pending: _("ещё не проверялся"),
     unobserved: _("без наблюдения"),
   };
+
 
   const details = E("details", { class: "xkop-details" }, [
     E("summary", {}, _("Показать узлы") + " (" + list.length + ")"),
@@ -262,16 +263,28 @@ function renderPool(nodes, refresh) {
         E("th", { class: "th" }, _("узел")),
         E("th", { class: "th" }, _("состояние")),
         E("th", { class: "th" }, _("задержка")),
+        E("th", { class: "th" }, _("проверок")),
         E("th", { class: "th" }, ""),
       ]),
     ].concat(
       list.map(function (n) {
         const current = nodes.selected === n.tag;
+        // «Мёртв» без причины — это приговор без разбирательства. Причину
+        // называет сам движок, если она у него есть, и число проверок отвечает
+        // на главный вопрос: пробовали ли вообще.
+        const probes = (n.probes === null || n.probes === undefined) ? "—"
+          : (n.failures ? n.probes + " (" + _("отказов ") + n.failures + ")" : String(n.probes));
+
         return E("tr", { class: "tr" + (current ? " xkop-row-current" : "") }, [
-          E("td", { class: "td" }, n.tag),
+          E("td", { class: "td" }, [
+            E("div", {}, n.tag),
+            n.state === "dead" && n.last_error
+              ? E("div", { class: "xkop-hint-wrap" }, n.last_error) : "",
+          ]),
           E("td", { class: "td xkop-state-" + n.state }, states[n.state] || n.state),
           E("td", { class: "td" }, n.delay_ms === null || n.delay_ms === undefined
             ? "—" : n.delay_ms + " мс"),
+          E("td", { class: "td" }, probes),
           E("td", { class: "td" }, [
             current
               ? E("span", { class: "xkop-hint" }, _("выбран"))

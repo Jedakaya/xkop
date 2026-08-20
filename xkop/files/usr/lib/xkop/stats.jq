@@ -105,7 +105,19 @@ def node_from_status($tag; $s):
       else
         {
             tag: $tag,
-            state: (if $alive then "alive" else "dead" end),
+            # A node the observatory has never tried is not a dead node.
+            # "alive" is absent for both, because omitempty drops false - so
+            # absence alone proves nothing, and evidence of an attempt has to
+            # be looked for: a try time, a delay, or a recorded error. Without
+            # any of the three the honest answer is "not probed yet".
+            state: (
+                if $alive then "alive"
+                elif (($s.last_try_time // 0) == 0)
+                     and (($s.delay // 0) == 0)
+                     and (($s.last_error_reason // "") == "") then "pending"
+                else "dead"
+                end
+            ),
             delay_ms: (if $alive and (($s.delay // 0) != dead_delay) then ($s.delay // 0) else null end),
             probes: null,
             failures: null,

@@ -1,0 +1,102 @@
+{
+  "ok": true,
+  "error": null,
+  "detail": null,
+  "source": {
+    "address": "127.0.0.1:11111",
+    "collected_at": 1755600000
+  },
+  "traffic": {
+    "outbound": {
+      "direct": {
+        "uplink": 100,
+        "downlink": 900,
+        "total": 1000
+      },
+      "NL-Amsterdam-2": {
+        "uplink": 50,
+        "downlink": 450,
+        "total": 500
+      },
+      "DE-Frankfurt-1": {
+        "uplink": 0,
+        "downlink": 0,
+        "total": 0
+      }
+    },
+    "inbound": {},
+    "outbound_total": {
+      "uplink": 150,
+      "downlink": 1350,
+      "total": 1500
+    }
+  },
+  "distribution": {
+    "direct": {
+      "bytes": 1000,
+      "share": 0.6667
+    },
+    "proxy": {
+      "bytes": 500,
+      "share": 0.3333
+    },
+    "blocked": {
+      "bytes": 0,
+      "share": 0
+    },
+    "service": {
+      "bytes": 0,
+      "share": 0
+    }
+  },
+  "observatory": {
+    "state": "active",
+    "nodes": [
+      {
+        "tag": "DE-Frankfurt-1",
+        "state": "dead",
+        "delay_ms": null,
+        "probes": null,
+        "failures": null,
+        "average_ms": null,
+        "min_ms": null,
+        "max_ms": null,
+        "deviation_ms": null,
+        "last_seen": null,
+        "last_try": 1755600118,
+        "last_error": "dial tcp: i/o timeout",
+        "source": "probe"
+      },
+      {
+        "tag": "NL-Amsterdam-2",
+        "state": "alive",
+        "delay_ms": 42,
+        "probes": null,
+        "failures": null,
+        "average_ms": null,
+        "min_ms": null,
+        "max_ms": null,
+        "deviation_ms": null,
+        "last_seen": 1755600120,
+        "last_try": 1755600120,
+        "last_error": null,
+        "source": "probe"
+      },
+      {
+        "tag": "PL-Warsaw-3",
+        "state": "pending",
+        "delay_ms": null,
+        "probes": null,
+        "failures": null,
+        "average_ms": null,
+        "min_ms": null,
+        "max_ms": null,
+        "deviation_ms": null,
+        "last_seen": null,
+        "last_try": null,
+        "last_error": null,
+        "source": "probe"
+      }
+    ]
+  }
+}

@@ -69,8 +69,29 @@ cron_remove() {
     /etc/init.d/cron reload > /dev/null 2>&1 || true
 }
 
+# Is the engine process alive.
+#
+# pgrep alone was not enough: it is a busybox applet that a build can leave
+# out, and when it is missing the answer comes back "not running" for an engine
+# that is serving traffic and answering its own metrics endpoint. The whole
+# overview then contradicts itself - traffic counted, service stopped.
+#
+# /proc is always there, so it is the fallback: comm holds the executable name
+# for every live process.
 engine_process_running() {
-    pgrep -x "${XKOP_ENGINE_BIN:-xray}" > /dev/null 2>&1
+    local name="${XKOP_ENGINE_BIN:-xray}" comm
+
+    if command -v pgrep > /dev/null 2>&1; then
+        pgrep -x "$name" > /dev/null 2>&1 && return 0
+    fi
+
+    for comm in /proc/[0-9]*/comm; do
+        [ -r "$comm" ] || continue
+        read -r found < "$comm" 2> /dev/null || continue
+        [ "$found" = "$name" ] && return 0
+    done
+
+    return 1
 }
 
 # Proof, not assumption: the metrics endpoint answers only when the engine is
@@ -193,8 +214,13 @@ service_control() {
 
     # A start that returned zero and an engine that is actually up are not the
     # same thing, and telling them apart is the whole point of asking.
+    #
+    # Eight seconds, not twenty: the call comes from LuCI over rpcd, and rpcd
+    # gives up on it long before twenty. The interface then reported
+    # not_reachable for a start that was working - the wait outlived the caller.
+    # What the wait misses, the overview picks up on its next refresh.
     case "$action" in
-        start | restart) engine_wait 20 > /dev/null 2>&1 ;;
+        start | restart) engine_wait 8 > /dev/null 2>&1 ;;
     esac
 
     jq -nc --arg a "$action" --argjson status "$(service_status_json)" \

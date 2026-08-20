@@ -1,5 +1,6 @@
 "use strict";
 "require form";
+"require uci";
 "require network";
 
 // Настройки.
@@ -58,6 +59,9 @@ function channels(map) {
 
   o = s.option(form.DynamicList, "subscription", _("Подписки"),
     _("Можно несколько — тогда серверы сливаются в общий пул."));
+  uci.sections("xkop", "subscription", function (sec) {
+    o.value(sec[".name"], sec[".name"] + (sec.url ? "" : " — " + _("ссылка не задана")));
+  });
   o.depends("type", "subscription");
   o.optional = true;
 
@@ -135,18 +139,35 @@ function profiles(map) {
   o.optional = true;
 }
 
+// Привязка отвечает на один вопрос: что куда направить. Поэтому и профиль,
+// и канал — списки уже заведённого, а не поля, где надо вспомнить имя секции.
 function bindings(map) {
   const s = map.section(form.TypedSection, "binding", _("Привязки"),
-    _("Профиль в канал. Это и есть маршрутизация."));
+    _("Что куда направить: профиль (какие домены) в канал (каким путём). Из этих строк и складывается маршрутизация."));
   s.anonymous = false;
   s.addremove = true;
   s.addbtntitle = _("Добавить привязку");
 
-  let o = s.option(form.Value, "profile", _("Профиль"));
-  o = s.option(form.Value, "channel", _("Канал"));
+  let o = s.option(form.ListValue, "profile", _("Что направляем"),
+    _("Профиль со списками доменов и подсетей."));
+  uci.sections("xkop", "profile", function (sec) {
+    o.value(sec[".name"], (sec.title || sec[".name"]) + " (" + sec[".name"] + ")");
+  });
+
+  o = s.option(form.ListValue, "channel", _("Куда направляем"),
+    _("Канал: подписка, напрямую или блокировать."));
+  const channelTitles = {
+    subscription: _("через подписку"),
+    direct: _("напрямую"),
+    block: _("блокировать"),
+  };
+  uci.sections("xkop", "channel", function (sec) {
+    const kind = channelTitles[sec.type] || sec.type || "";
+    o.value(sec[".name"], sec[".name"] + (kind ? " — " + kind : ""));
+  });
 
   o = s.option(form.Value, "order", _("Порядок"),
-    _("Меньше — раньше. Решает, чей профиль победит при пересечении."));
+    _("Меньше — раньше. Решает, чей профиль победит, если домен попал сразу в два."));
   o.datatype = "uinteger";
   o.default = "100";
 }
@@ -157,7 +178,7 @@ function bindings(map) {
 // с интерфейсами и журналом. Настройка, которую невозможно найти, ничем
 // не отличается от отсутствующей.
 function dns(map) {
-  const s = map.section(form.NamedSection, "settings", "settings", _("DNS"));
+  const s = map.section(form.NamedSection, "settings", "dns", _("DNS"));
   s.anonymous = true;
   s.addremove = false;
 
@@ -175,13 +196,33 @@ function dns(map) {
   o.default = "doh";
   o.depends("dns_mode", "fakeip");
 
+  // Список с возможностью вписать своё: form.Value с вариантами — это
+  // выпадающий список, который не запрещает ввод. Схему подставляет генератор
+  // по выбранному способу, поэтому здесь чистый адрес.
   o = s.option(form.Value, "dns_server", _("Резолвер"),
-    _("Задавать адресом, а не именем: имя требует разрешения по тому самому порту 53, который и перехватывают."));
-  o.default = "8.8.8.8/dns-query";
+    _("Адрес предпочтительнее имени: имя надо где-то разрешить, а порт 53 как раз и перехватывают."));
+  [
+    ["8.8.8.8", "8.8.8.8 (Google)"],
+    ["8.8.4.4", "8.8.4.4 (Google)"],
+    ["1.1.1.1", "1.1.1.1 (Cloudflare)"],
+    ["1.0.0.1", "1.0.0.1 (Cloudflare)"],
+    ["9.9.9.9", "9.9.9.9 (Quad9)"],
+    ["dns.adguard-dns.com", "AdGuard, обычный"],
+    ["unfiltered.adguard-dns.com", "AdGuard, без фильтров"],
+    ["family.adguard-dns.com", "AdGuard, семейный"],
+  ].forEach(function (pair) { o.value(pair[0], pair[1]); });
+  o.default = "8.8.8.8";
   o.depends("dns_mode", "fakeip");
 
   o = s.option(form.Value, "dns_bootstrap", _("Опорный резолвер"),
     _("Нужен, только если основной задан именем: им это имя и разрешается."));
+  [
+    ["77.88.8.8", "77.88.8.8 (Яндекс)"],
+    ["77.88.8.1", "77.88.8.1 (Яндекс)"],
+    ["1.1.1.1", "1.1.1.1 (Cloudflare)"],
+    ["8.8.8.8", "8.8.8.8 (Google)"],
+    ["9.9.9.9", "9.9.9.9 (Quad9)"],
+  ].forEach(function (pair) { o.value(pair[0], pair[1]); });
   o.default = "77.88.8.8";
   o.optional = true;
   o.depends("dns_mode", "fakeip");
@@ -233,7 +274,7 @@ function dns(map) {
 }
 
 function system(map) {
-  const s = map.section(form.NamedSection, "settings", "settings", _("Система"));
+  const s = map.section(form.NamedSection, "settings", "system", _("Система"));
   s.anonymous = true;
   s.addremove = false;
 
