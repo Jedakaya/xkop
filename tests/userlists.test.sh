@@ -97,6 +97,44 @@ curl() { cp "$work/portal.html" "$3" 2> /dev/null || return 1; return 0; }
 userlist_fetch 'https://example.com/list.lst' domains > /dev/null 2>&1
 check "мусор не затирает рабочий список" "good.example.com" "$(cat "$target")"
 
+# --- список приехал документом JSON ----------------------------------------
+#
+# Официальные списки CDN отдаются документом, и формы у всех разные. Живой
+# роутер упёрся в это буквально: адреса Fastly пришлось вписывать в uci
+# руками, потому что подключить их ссылкой было нельзя, а без них телефон
+# не открывал ни App Store, ни downdetector.
+
+cat > "$work/fastly.json" << 'JSON'
+{"addresses": ["23.235.32.0/20", "151.101.0.0/16"],
+ "ipv6_addresses": ["2a04:4e42::/32"]}
+JSON
+
+userlist_flatten_json "$work/fastly.json"
+check "из документа Fastly взяты адреса" "2"     "$(userlist_clean_subnets "$work/fastly.json" | wc -l | tr -d ' ')"
+check "адрес на месте" "yes"     "$(userlist_clean_subnets "$work/fastly.json" | grep -q '^151\.101\.0\.0/16$' && echo yes || echo no)"
+
+# Форма Google: адреса лежат в объектах, а не в массиве строк.
+cat > "$work/google.json" << 'JSON'
+{"prefixes": [{"ipv4Prefix": "8.8.4.0/24"}, {"ipv6Prefix": "2001:4860::/32"},
+              {"ipv4Prefix": "8.8.8.0/24"}]}
+JSON
+
+userlist_flatten_json "$work/google.json"
+check "из вложенных объектов тоже" "2"     "$(userlist_clean_subnets "$work/google.json" | wc -l | tr -d ' ')"
+
+# Обычный текстовый список не трогаем вовсе.
+printf '1.2.3.0/24
+4.5.6.0/24
+' > "$work/plain.lst"
+check "текстовый список не документ" "no"     "$(userlist_flatten_json "$work/plain.lst" && echo yes || echo no)"
+check "текстовый список не испорчен" "2"     "$(userlist_clean_subnets "$work/plain.lst" | wc -l | tr -d ' ')"
+
+# Документ без единой пригодной строки не должен подменять файл на пустой.
+printf '{"note": "ничего полезного"}
+' > "$work/empty.json"
+userlist_flatten_json "$work/empty.json" > /dev/null 2>&1
+check "бесполезный документ не даёт подсетей" "0"     "$(userlist_clean_subnets "$work/empty.json" | wc -l | tr -d ' ')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

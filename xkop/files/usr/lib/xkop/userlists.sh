@@ -38,6 +38,42 @@ userlist_clean_subnets() {
         | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$'
 }
 
+# Список может приехать не строками, а документом JSON.
+#
+# Официальные списки отдаются именно так, и у каждого своя форма: Fastly
+# кладёт адреса в {"addresses": [...]}, Google - в {"prefixes":
+# [{"ipv4Prefix": ...}]}, набор правил sing-box - в {"rules": [{"ip_cidr":
+# [...]}]}. Угадывать каждую форму незачем и вредно: берём из документа
+# все строки подряд, а дальше работает та же проверка, что и для обычного
+# файла, - в правило попадёт только похожее на подсеть или на имя.
+#
+# Это ровно то место, где живой роутер упёрся: адреса Fastly пришлось
+# вписывать руками, потому что подключить их ссылкой было нельзя. podkop
+# разбирает только свой формат правил sing-box, остальное у него тоже
+# переписывается руками.
+userlist_flatten_json() {
+    local file="$1"
+
+    case "$(head -c 200 "$file" 2> /dev/null | tr -d '[:space:]' | cut -c1)" in
+        '{' | '[') ;;
+        *) return 1 ;;
+    esac
+
+    # Через файл, а не через переменную: список подсетей целого CDN - это
+    # десятки тысяч строк, и держать их в памяти оболочки на роутере незачем.
+    if ! jq -r '[.. | strings] | .[]' "$file" > "$file.flat" 2> /dev/null; then
+        rm -f "$file.flat"
+        return 1
+    fi
+
+    if [ ! -s "$file.flat" ]; then
+        rm -f "$file.flat"
+        return 1
+    fi
+
+    mv "$file.flat" "$file"
+}
+
 # Downloads into RAM, checks it parses into something, and only then replaces
 # the cached copy. A list that arrived as an error page leaves yesterday's
 # rules in place.
@@ -52,6 +88,8 @@ userlist_fetch() {
         rm -f "$tmp"
         return 1
     fi
+
+    userlist_flatten_json "$tmp"
 
     if [ "$kind" = "subnets" ]; then
         count=$(userlist_clean_subnets "$tmp" | wc -l | tr -d ' ')
