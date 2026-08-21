@@ -6,10 +6,19 @@
 # /usr/lib/xkop and prints JSON. Human readable output goes to the log, not to
 # stdout - the client panel and LuCI parse what they get here.
 
+# Обращение к незаданной переменной — ошибка, а не пустая строка.
+#
+# Без этого опечатка в имени внутри редкой ветки проходит молча и подставляет
+# пустоту: команда отрабатывает, ничего не делает и рапортует успех. Ровно так
+# в установщике жила использованная-до-присвоения переменная, и поймала её
+# отдельная проверка, а не сам shell.
+set -u
+
 XKOP_LIB_DIR='/usr/lib/xkop'
 
 . "$XKOP_LIB_DIR/constants.sh"
 . "$XKOP_LIB_DIR/logging.sh"
+. "$XKOP_LIB_DIR/lock.sh"
 . "$XKOP_LIB_DIR/version.sh"
 . "$XKOP_LIB_DIR/stats.sh"
 . "$XKOP_LIB_DIR/subscription.sh"
@@ -44,6 +53,21 @@ cmd_configure() {
         --argjson exists "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
         '{ok: ($reason != "kept_previous"), result: $reason, path: $path,
           nodes: $nodes, config_present: $exists}'
+}
+
+# Проверка подмены DNS и то, что из неё следует.
+#
+# Обнаружение и решение разделены намеренно: Канарейка отвечает только
+# на вопрос «подменяют ли», а перезапуск с новой конфигурацией — уже решение,
+# и принимается оно здесь. В podkop эти две вещи были смешаны, и отладить
+# их не удавалось.
+cmd_canary() {
+    canary_state_json
+
+    [ -s "$XKOP_RUN_DIR/canary.json" ] || return 0
+    [ "$(jq -r '.changed' "$XKOP_RUN_DIR/canary.json" 2> /dev/null)" = "true" ] || return 0
+
+    config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
 }
 
 # Состояние движка. Поля именуются по роли, а не по названию движка: панель
@@ -218,7 +242,7 @@ main() {
             explain_recent "${1:-20}"
             ;;
         access_trim)
-            access_trim
+            lock_run work access_trim
             jq -nc '{ok: true, result: "trimmed"}'
             ;;
         nodes)
@@ -231,18 +255,21 @@ main() {
             nodes_select "${1:-auto}"
             ;;
         keep)
-            nodes_keep
+            # Под замком: рядом может идти canary с перезапуском службы,
+            # а закрепление узла читает состояние движка.
+            lock_run work nodes_keep
             ;;
         canary)
             # Если выученное изменилось, движок держит конфигурацию, которая
             # больше не соответствует тому, что мы знаем про эту сеть.
-            canary_state_json
-            if [ -s "$XKOP_RUN_DIR/canary.json" ]                && [ "$(jq -r ".changed" "$XKOP_RUN_DIR/canary.json")" = "true" ]; then
-                config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
-            fi
+            #
+            # Под замком целиком: между «узнали» и «перезапустили» стоит
+            # запись в uci и пересборка конфигурации, и вклиниваться туда
+            # другой задаче нельзя.
+            lock_run work cmd_canary
             ;;
         userlists_update)
-            userlist_update_all
+            lock_run work userlist_update_all
             ;;
         update)
             update_apply
@@ -251,10 +278,10 @@ main() {
             update_check_json
             ;;
         configure)
-            cmd_configure
+            lock_run work cmd_configure
             ;;
         prepare)
-            if service_prepare; then
+            if lock_run work service_prepare; then
                 jq -nc '{ok: true, result: "prepared"}'
             else
                 jq -nc '{ok: false, error: "nothing_to_run", detail: {config_present: false}}'
