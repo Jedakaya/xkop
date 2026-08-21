@@ -339,6 +339,23 @@ check "заданный руками сосед не подменяется" "tr
 out=$(gen_dns '.settings.dns_server = "https://127.0.0.1/dns-query" | .settings.dns_extra = []')
 check "локальный по схеме тоже опознан" "true"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | .address? // .] | any(. == "https://8.8.8.8/dns-query")')"
 
+# --- ожидание ответа от локального резолвера ---------------------------------
+#
+# Умолчание движка — четыре секунды на сервер. Локальному это много: он либо
+# отвечает за миллисекунды, либо его нет вовсе — поднимается, упал,
+# перезапускается. Четыре секунды на каждое имя в такой момент человек видит
+# как «интернет умер», хотя рядом стоит шифрованный сосед.
+
+out=$(gen_dns '.settings.dns_type = "udp" | .settings.dns_server = "127.0.0.10" | .settings.dns_extra = []')
+check "локальному задано короткое ожидание" "1500"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | select((.address? // "") == "127.0.0.10") | .timeoutMs] | first')"
+check "соседу оставлено умолчание" "true"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | select((.address? // "") == "https://8.8.8.8/dns-query")] | all(.timeoutMs == null)')"
+
+out=$(gen_dns '.settings.dns_server = "8.8.8.8" | .settings.dns_extra = []')
+check "внешнему резолверу ожидание не навязывается" "true"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | select(type == "object")] | all(.timeoutMs == null)')"
+
+out=$(gen_dns '.settings.dns_type = "udp" | .settings.dns_server = "127.0.0.10" | .settings.dns_local_timeout_ms = "800"')
+check "значение берётся из настроек" "800"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | select((.address? // "") == "127.0.0.10") | .timeoutMs] | first')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

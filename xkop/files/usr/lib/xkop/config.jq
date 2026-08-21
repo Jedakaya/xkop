@@ -294,6 +294,10 @@ def dns_servers:
     resolver_address(settings.dns_server) as $primary
     | (settings.canary_learned // []) as $learned
     | (settings.dns_bootstrap // "") as $bootstrap
+    # Значение берётся здесь, а не внутри map ниже: там точка — это элемент
+    # списка, и `settings` смотрел бы на него, а не на корень. Молча, с виду
+    # работающим умолчанием.
+    | ((settings.dns_local_timeout_ms // "1500") | tonumber? // 1500) as $local_timeout
     # Исключения идут первыми, иначе подделка заберёт их себе.
     | (if fakeip_enabled and ((dns_real_domains | length) > 0) then
         [ {address: $primary, domains: dns_real_domains} ]
@@ -345,7 +349,22 @@ def dns_servers:
     # отвечал только на то, на что не ответил основной. Когда основной задан
     # адресом, разрешать нечего, и лишний резолвер только путал бы.
     + (if $bootstrap != "" and (is_ipv4(settings.dns_server // "") | not)
-       then [ {address: $bootstrap} ] else [] end);
+       then [ {address: $bootstrap} ] else [] end)
+    # Ожидание ответа от локального резолвера.
+    #
+    # Умолчание движка — четыре секунды на сервер, так сказано в документации.
+    # Локальному это много: он либо отвечает за миллисекунды, либо его нет
+    # вовсе — поднимается, упал, перезапускается. Четыре секунды на каждое имя
+    # в такой момент человек видит как «интернет умер», хотя рядом стоит
+    # шифрованный сосед, готовый ответить сразу.
+    #
+    # Ставится последним шагом, чтобы не разбивать группировку серверов:
+    # соседние серверы движок считает одной группой, только когда у них
+    # совпадают domains, expectedIPs и unexpectedIPs, — timeoutMs в этот
+    # перечень не входит.
+    | map(if (.address? // "") != "" and is_local_resolver(.address)
+          then . + {timeoutMs: $local_timeout}
+          else . end);
 
 def dns_section:
     {
