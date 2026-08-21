@@ -279,6 +279,29 @@ check "prepare не обёрнут в пропускающий замок" "no" 
 check "prepare ждёт замок, но работает в любом случае" "yes"     "$(grep -A 14 'prepare)' "$cli" | grep -q 'lock_run_anyway' && echo yes || echo no)"
 check "configure тоже не пропускается" "no"     "$(grep -A 4 'configure)' "$cli" | grep -q 'lock_run work' && echo yes || echo no)"
 
+# --- тонкости OpenWrt, вычитанные из его же исходников ----------------------
+
+# sysupgrade сохраняет /etc/config и то, что пакет назвал в keep.d — так делают
+# dnsmasq и uhttpd. Всё наше состояние лежит вне /etc/config: кэш подписки,
+# закреплённый узел, кэш списков. Без этого файла роутер после обновления
+# прошивки поднимается без узлов.
+check "состояние помечено как переживающее прошивку" "yes"     "$([ -s "$ROOT/xkop/files/lib/upgrade/keep.d/xkop" ] && echo yes || echo no)"
+check "и пакет его кладёт" "yes"     "$(grep -q 'keep.d/xkop' "$ROOT/xkop/Makefile" && echo yes || echo no)"
+check "и установка с ветки тоже" "yes"     "$(grep -q 'keep.d/xkop' "$ROOT/install.sh" && echo yes || echo no)"
+
+# Без STOP в /etc/rc.d создаётся только S-ссылка, и stop_service при выключении
+# роутера не вызывается никогда. Вместе с выключенным автозапуском это
+# оставляет dnsmasq направленным на несуществующий движок — сеть без имён.
+init="$ROOT/xkop/files/etc/init.d/xkop"
+check "останов при выключении объявлен" "yes"     "$(grep -qE '^STOP=[0-9]+' "$init" && echo yes || echo no)"
+check "и раньше запуска по номеру" "yes"     "$(awk -F= '/^START=/ {s=$2} /^STOP=/ {t=$2} END {print (t < s) ? "yes" : "no"}' "$init")"
+
+# Движку с сотнями соединений пяти секунд по умолчанию мало.
+check "движку дано время на мягкое завершение" "yes"     "$(grep -q 'term_timeout' "$init" && echo yes || echo no)"
+
+# Выключение автозапуска не имеет права оставить сеть без имён.
+check "выключение автозапуска возвращает резолвер" "yes"     "$(grep -A 20 '^        disable)' "$ROOT/xkop/files/usr/bin/xkop" | grep -q 'dnsmasq_restore' && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

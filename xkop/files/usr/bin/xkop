@@ -343,10 +343,38 @@ main() {
         check_engine | check_sing_box)
             cmd_check_engine
             ;;
-        start | stop | restart | enable | disable)
+        start | stop | restart | enable)
             # Служба живёт в procd, и решение о процессе принимает он.
             /etc/init.d/xkop "$command" > /dev/null 2>&1
             jq -nc --arg action "$command" '{ok: true, result: $action}'
+            ;;
+        disable)
+            # Выключение автозапуска не имеет права оставить сеть без имён.
+            #
+            # `disable` убирает ссылку автозапуска и больше ничего: служба
+            # продолжает работать, а резолвер клиентов остаётся направленным
+            # на движок и записанным в uci. После перезагрузки движка нет,
+            # dnsmasq поднимается на несуществующем адресе — и вся сеть без
+            # имён при внешне исправном роутере.
+            #
+            # Штатная остановка это чинит (её теперь зовёт и выключение
+            # роутера, ради чего добавлен STOP), но если служба уже не
+            # работает, разбирать некому — тогда резолвер возвращаем здесь.
+            /etc/init.d/xkop disable > /dev/null 2>&1
+
+            restored=0
+            if ! engine_process_running; then
+                dnsmasq_restore > /dev/null 2>&1
+                restored=1
+            fi
+
+            jq -nc --argjson restored "$restored" \
+                '{ok: true, result: "disable",
+                  resolver_restored: ($restored == 1),
+                  hint: (if $restored == 1
+                         then "резолвер возвращён: служба не работала"
+                         else "служба продолжает работать; при остановке резолвер вернётся сам"
+                         end)}'
             ;;
         show_config | show_engine_config | show_sing_box_config)
             cmd_show_engine_config

@@ -13,6 +13,10 @@ config settings 'settings'
 	option dns_bootstrap '77.88.8.8'
 	option dns_parallel '0'
 	#list dns_extra_server 'dot:1.1.1.1'
+	# Имена, у которых движок не подменяет адрес назначения. Известные
+	# (push iOS, Xiaomi) учтены в самом генераторе, это добавка под свои
+	# устройства.
+	#list sniff_excluded 'dlg.io.mi.com'
 	option canary_enabled '1'
 	option canary_interval '2m'
 	#list canary_learned_ip '46.191.166.9'

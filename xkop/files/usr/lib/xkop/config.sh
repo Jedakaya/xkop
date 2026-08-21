@@ -77,6 +77,7 @@ config_settings_json() {
         --arg dns_address "$XKOP_DNS_INBOUND_ADDRESS" \
         --arg dns_port "$XKOP_DNS_INBOUND_PORT" \
         --arg fakeip_range "$XKOP_FAKEIP_RANGE" \
+        --argjson sniff_excluded "$(config_uci_list_json settings sniff_excluded)" \
         --argjson dns_extra "$(config_uci_list_json settings dns_extra_server)" \
         --argjson canary_learned "$(config_uci_list_json settings canary_learned_ip)" \
         --argjson fully_routed "$(config_uci_list_json settings fully_routed_ip)" \
@@ -95,6 +96,10 @@ config_settings_json() {
             dns_port: (($dns_port | tonumber?) // 53),
             fakeip_range: $fakeip_range,
             dns_extra: $dns_extra,
+            # Имена, у которых адрес подменять нельзя: push iOS, устройства
+            # Xiaomi, голосовой чат в играх. Базовый список зашит в генераторе,
+            # это — добавка человека под свои устройства.
+            sniff_excluded: $sniff_excluded,
             canary_learned: $canary_learned,
             fully_routed_ip: $fully_routed
         } + {

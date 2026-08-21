@@ -147,6 +147,32 @@ fi
 sleep 18
 
 echo
+echo "== тонкости OpenWrt"
+
+# Без K-ссылки stop_service при выключении роутера не вызывается никогда,
+# и резолвер остаётся направленным на движок, которого после перезагрузки нет.
+if ls /etc/rc.d/ 2> /dev/null | grep -q '^K[0-9]*xkop$'; then
+    ok "останов при выключении роутера включён"
+else
+    bad "останов при выключении роутера включён" "нет ссылки K в /etc/rc.d"
+fi
+
+# Всё состояние лежит вне /etc/config и без этого файла теряется при sysupgrade.
+if [ -s /lib/upgrade/keep.d/xkop ]; then
+    ok "состояние переживёт обновление прошивки"
+else
+    bad "состояние переживёт обновление прошивки" "нет /lib/upgrade/keep.d/xkop"
+fi
+
+# Пять секунд по умолчанию мало движку с сотнями соединений.
+tt=$(ubus call service list 2> /dev/null | jq -r '.xkop.instances.engine.term_timeout // 0' 2> /dev/null)
+need "времени на мягкое завершение движка" "${tt:-0}" 10
+
+# Имена, у которых подмена адреса ломает работу молча: push iOS, Xiaomi.
+excluded=$(jq '[.inbounds[0].sniffing.domainsExcluded[]?] | length' /etc/xkop/config.json 2> /dev/null)
+need "исключений распознавания" "${excluded:-0}" 3
+
+echo
 echo "== замок не отменяет запуск службы"
 
 # Тот самый случай: обновление пакета останавливает службу, а запуск попадает

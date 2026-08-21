@@ -56,6 +56,12 @@ define Package/xkop/install
 	$(INSTALL_DIR) $(1)/usr/lib/xkop
 	$(CP) ./files/usr/lib/xkop/* $(1)/usr/lib/xkop/
 
+	# Что обязано пережить обновление прошивки. sysupgrade сохраняет
+	# /etc/config и то, что пакеты назвали в keep.d — так делают dnsmasq
+	# и uhttpd. Всё наше состояние лежит вне /etc/config.
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) ./files/lib/upgrade/keep.d/xkop $(1)/lib/upgrade/keep.d/xkop
+
 	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PKG_VERSION)/g' $(1)/usr/lib/xkop/constants.sh
 endef
 

@@ -963,6 +963,18 @@ service.sh migrate.sh"
     cp "$WORK/init.d-xkop" /etc/init.d/xkop
     chmod +x /usr/bin/xkop /etc/init.d/xkop
 
+    # Что обязано пережить обновление прошивки. В пакете этот файл кладёт
+    # Makefile; при установке с ветки его нужно положить руками, иначе
+    # состояние — кэш подписки, закреплённый узел, кэш списков — потеряется
+    # при первом же sysupgrade, и роутер поднимется без узлов.
+    if fetch_repo_file "xkop/files/lib/upgrade/keep.d/xkop" "$WORK/keep-xkop"; then
+        mkdir -p /lib/upgrade/keep.d
+        cp "$WORK/keep-xkop" /lib/upgrade/keep.d/xkop
+        note "состояние помечено как переживающее обновление прошивки"
+    else
+        warn "не удалось положить /lib/upgrade/keep.d/xkop: состояние не переживёт sysupgrade"
+    fi
+
     # У сборки версия подставляется из тега; установка с ветки ставит хэш,
     # чтобы роутер всегда мог сказать, что именно на нём работает.
     sed -i "s/__COMPILED_VERSION_VARIABLE__/$(echo "$SHA" | cut -c1-7)/" "$XKOP_LIB_DIR/constants.sh"
