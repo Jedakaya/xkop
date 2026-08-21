@@ -74,6 +74,18 @@ define Package/xkop/prerm
 
 /etc/init.d/xkop stop 2>/dev/null
 
+# Панель клиента — не файлы пакета, а отдельный экземпляр uhttpd, заведённый
+# нами в uci. Пакет его не унесёт: удаление пакета оставляло слушателя
+# на порту 8090, который отдаёт каталог, которого больше нет.
+#
+# Функция для этого была написана и не вызывалась ниоткуда - её нашёл аудит.
+if [ -r /usr/lib/xkop/constants.sh ] && [ -r /usr/lib/xkop/service.sh ]; then
+	. /usr/lib/xkop/constants.sh 2>/dev/null
+	. /usr/lib/xkop/logging.sh 2>/dev/null
+	. /usr/lib/xkop/service.sh 2>/dev/null
+	command -v panel_remove_uhttpd >/dev/null 2>&1 && panel_remove_uhttpd
+fi
+
 exit 0
 endef
 

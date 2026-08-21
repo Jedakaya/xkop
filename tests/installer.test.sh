@@ -245,6 +245,27 @@ want=$(name='xray-xkop-26.7.28-r1-aarch64_cortex-a53.apk'; name="${name#xray-xko
 check "версия из менеджера и из имени файла совпадают" "$have" "$want"
 check "и это не пустая строка" "26.7.28-r1" "$have"
 
+# --- настройка, которую можно задать только через uci, — это не настройка ----
+#
+# Буферы движка, простой соединения и ожидание рукопожатия читаются кодом,
+# но в интерфейс выведены не были: человек, упёршийся в нехватку памяти,
+# доступа к ним не имел вовсе. А именно они однажды и стоили роутеру всей
+# памяти — движок съел 350 МБ из 485.
+
+ui="$ROOT/luci-app-xkop/htdocs/luci-static/resources/view/xkop/settings.js"
+missing=""
+for opt in $(grep -oE "^\s*(option|list) [a-z_]+" "$ROOT/xkop/files/etc/config/xkop"     | awk '{print $2}' | sort -u); do
+    grep -rq "$opt" "$ROOT/xkop/files/usr/" 2> /dev/null || continue
+    grep -q "\"$opt\"" "$ui" 2> /dev/null || missing="$missing $opt"
+done
+
+check "всё, что читает код, есть в интерфейсе" "" "$missing"
+
+# Панель клиента — отдельный экземпляр uhttpd в uci, а не файлы пакета.
+# Удаление пакета оставляло слушателя на порту 8090, отдающего каталог,
+# которого больше нет: функция снятия была написана и не вызывалась ниоткуда.
+check "удаление пакета уносит панель" "yes"     "$(grep -q 'panel_remove_uhttpd' "$ROOT/xkop/Makefile" && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
