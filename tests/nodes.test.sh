@@ -104,6 +104,41 @@ sel=$(nodes_selection_json)
 check "без закрепления показывается выбор стратегии" "DE-Frankfurt-1"     "$(printf '%s' "$sel" | "$JQ" -r '.selected')"
 check "и это названо автоматическим" "auto"     "$(printf '%s' "$sel" | "$JQ" -r '.selection')"
 
+# --- «мёртв» только когда мёртв ---------------------------------------------
+#
+# Состояние приходит от пробы движка, а проба проверяет не узел, а дорогу
+# ЧЕРЕЗ узел до постороннего адреса. Она падает и тогда, когда узел жив,
+# но имя цели не резолвится — например локальный резолвер ещё не поднялся.
+# На живом роутере панель показывала «мёртв» и рядом задержку 7 мс: две
+# цифры в одной строке, противоречащие друг другу.
+
+nodes_selection_json() {
+    printf '{"selection":"auto","selected":"A","override":null}'
+}
+cmd_stats() {
+    printf '%s' '{"observatory":{"nodes":[{"tag":"A","state":"dead","delay_ms":null},
+                                          {"tag":"B","state":"dead","delay_ms":null},
+                                          {"tag":"C","state":"alive","delay_ms":80}]}}'
+}
+subscription_pool_all() {
+    printf '%s' '[{"tag":"A","protocol":"vless","subscription":"main"},
+                  {"tag":"B","protocol":"vless","subscription":"main"},
+                  {"tag":"C","protocol":"vless","subscription":"main"}]'
+}
+nodes_measure_rtt() { :; }
+
+# До A мы достучались сами, до B — нет.
+mkdir -p "$(dirname "$(nodes_rtt_path)")"
+printf '{"A": 7}' > "$(nodes_rtt_path)"
+
+out=$(nodes_json)
+
+check "узел, до которого достучались, не мёртв" '"probe_failed"'     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "A") | .state')"
+check "и задержка у него наша" "7"     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "A") | .delay_ms')"
+check "узел, до которого не достучались, остаётся мёртвым" '"dead"'     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "B") | .state')"
+check "живой остаётся живым" '"alive"'     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "C") | .state')"
+check "достижимость названа отдельным полем" "true"     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "A") | .reachable')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

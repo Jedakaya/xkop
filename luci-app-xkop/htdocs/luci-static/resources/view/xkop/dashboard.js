@@ -330,6 +330,7 @@ function renderPool(nodes, refresh) {
   const alive = list.filter(function (n) { return n.state === "alive"; }).length;
   const pending = list.filter(function (n) { return n.state === "pending"; }).length;
   const dead = list.filter(function (n) { return n.state === "dead"; }).length;
+  const stuck = list.filter(function (n) { return n.state === "probe_failed"; }).length;
 
   const head = [
     line(_("живых"), alive + _(" из ") + list.length,
@@ -338,6 +339,11 @@ function renderPool(nodes, refresh) {
 
   // Свежий узел до десяти минут не имеет данных наблюдения. Это состояние
   // «проверяется», а не «мёртв», иначе выглядит как поломка.
+  if (stuck > 0) {
+    head.push(line(_("отвечают, но проба не проходит"), String(stuck),
+      _("до узлов достучались, дорога через них не проверена — обычно резолвер")));
+  }
+
   if (pending > 0) {
     head.push(line(_("проверяется"), String(pending),
       _("узлы добавлены недавно, данных наблюдения ещё нет")));
@@ -362,6 +368,11 @@ function renderPool(nodes, refresh) {
   const states = {
     alive: _("жив"),
     dead: _("мёртв"),
+    // Узел ответил нам, а проба движка через него не прошла. Это не мёртвый
+    // узел: проба идёт через него до постороннего адреса и падает, в том
+    // числе когда имя цели не резолвится — например локальный резолвер ещё
+    // не поднялся. Писать «мёртв» рядом с задержкой в 7 мс значит врать.
+    probe_failed: _("отвечает, проба не проходит"),
     pending: _("ещё не проверялся"),
     unobserved: _("без наблюдения"),
   };
