@@ -190,6 +190,25 @@ rm -f "$broken"
 
 check "и ловит, когда порядок нарушен" "LATE" "$(echo $caught)"
 
+# --- неудачная установка не ломает менеджер пакетов -------------------------
+#
+# apk записывает пакет в /etc/apk/world раньше, чем закончит установку. Упала
+# установка - запись осталась, и дальше apk отказывает на КАЖДОЙ операции:
+# "unable to select packages: xray-xkop (no such package): required by:
+# world[...]". Роутер после этого не может поставить вообще ничего, в том
+# числе чужое, и связи с нами в сообщении не видно.
+#
+# Куплено на живом роутере: движку не хватило места, и человек потом не смог
+# вернуть себе podkop.
+
+check "список world снимается перед установкой" "yes"     "$(grep -q 'pkg_world_snapshot' "$ROOT/install.sh" && echo yes || echo no)"
+check "и возвращается, когда установка не прошла" "yes"     "$(grep -q 'pkg_world_restore' "$ROOT/install.sh" && echo yes || echo no)"
+check "засор от прошлых попыток чистится до работы с пакетами" "yes"     "$(awk '/pkg_world_repair$/ {repair = NR} /pkg_list_update \|\|/ {use = NR} END {print (repair > 0 && repair < use) ? "yes" : "no"}' "$ROOT/install.sh")"
+
+# Имя пакета движка podkop зависит от того, кто его собирал: sing-box-extended
+# на "apk del sing-box" не реагирует вовсе и остаётся занимать флэш.
+check "снимается всё семейство sing-box" "yes"     "$(grep -q "pkg_installed_like 'sing-box'" "$ROOT/install.sh" && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

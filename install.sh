@@ -239,6 +239,35 @@ pkg_install_would_succeed() {
     return 1
 }
 
+# Неудачная установка не имеет права ломать менеджер пакетов целиком.
+#
+# apk записывает пакет в /etc/apk/world — список «этот пакет мне нужен» —
+# раньше, чем завершит установку. Если установка падает (не хватило места),
+# запись остаётся, и дальше apk на КАЖДОЙ операции требует пакет, которого
+# нет: "unable to select packages: xray-xkop (no such package): required by:
+# world[...]". Роутер после этого не может поставить вообще ничего — ни наше,
+# ни чужое, — и связи с xkop у этого уже не видно.
+#
+# Куплено на живом роутере: движок не поместился, и человек потом не смог
+# вернуть себе podkop, потому что apk отказывал на всём подряд.
+#
+# Лечится откатом списка: снимок до установки, возврат при неудаче.
+pkg_world_snapshot() {
+    [ "$PKG_IS_APK" -eq 1 ] || return 0
+    [ -f /etc/apk/world ] || return 0
+    cp /etc/apk/world "$WORK/world.before" 2> /dev/null || true
+}
+
+pkg_world_restore() {
+    [ "$PKG_IS_APK" -eq 1 ] || return 0
+    [ -f "$WORK/world.before" ] || return 0
+
+    cmp -s "$WORK/world.before" /etc/apk/world 2> /dev/null && return 0
+
+    cp "$WORK/world.before" /etc/apk/world 2> /dev/null || return 0
+    note "список пакетов apk возвращён к прежнему: неудачная установка его засоряет"
+}
+
 pkg_install_file() {
     file="$1"
     [ -s "$file" ] || return 1
@@ -250,9 +279,40 @@ pkg_install_file() {
     fi
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        apk add --allow-untrusted --upgrade "$file" > /dev/null 2>&1
+        pkg_world_snapshot
+        if apk add --allow-untrusted --upgrade "$file" > /dev/null 2>&1; then
+            return 0
+        fi
+        pkg_world_restore
+        return 1
+    fi
+
+    opkg install "$file" > /dev/null 2>&1
+}
+
+# Засор, оставшийся от прошлых попыток, — в том числе от прошлых версий этого
+# же установщика. Пока он там, не встанет ничего, поэтому чистится до всего
+# остального и без вопросов: записи про наши пакеты в world при отсутствующих
+# файлах не значат ничего, кроме брошенной установки.
+pkg_world_repair() {
+    [ "$PKG_IS_APK" -eq 1 ] || return 0
+    [ -f /etc/apk/world ] || return 0
+
+    apk add --simulate --no-interactive > /dev/null 2>&1 && return 0
+
+    # Имена всех наших пакетов содержат xkop и ничьи больше: xray-xkop,
+    # luci-app-xkop, сам xkop. Запись в world бывает с ограничением по
+    # контрольной сумме - "xray-xkop>Q127DAn...=", - поэтому ищется вхождение,
+    # а не полное имя.
+    grep -q 'xkop' /etc/apk/world 2> /dev/null || return 0
+
+    warn "apk не может выполнить ни одной операции: в списке пакетов висит наша брошенная запись"
+    sed -i '/xkop/d' /etc/apk/world 2> /dev/null || return 0
+
+    if apk add --simulate --no-interactive > /dev/null 2>&1; then
+        note "запись убрана, apk снова работает"
     else
-        opkg install "$file" > /dev/null 2>&1
+        warn "запись убрана, но apk всё ещё отказывает — причина не в ней"
     fi
 }
 
@@ -574,6 +634,19 @@ pkg_drop() {
     fi
 }
 
+# Установленные пакеты, чьё имя начинается с этого. Нужно там, где имя пакета
+# зависит от того, кто его собирал: sing-box может называться sing-box,
+# sing-box-extended и как угодно ещё.
+pkg_installed_like() {
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk list --installed 2> /dev/null \
+            | sed -n "s/^\($1[a-z0-9._-]*\)-[0-9].*/\1/p"
+    else
+        opkg list-installed 2> /dev/null \
+            | sed -n "s/^\($1[a-z0-9._-]*\) .*/\1/p"
+    fi | sort -u
+}
+
 # Возврат резолверов, спрятанных podkop под свои ключи. Делается до удаления
 # пакетов и независимо от того, чем закончится удаление.
 podkop_dnsmasq_restore() {
@@ -621,11 +694,20 @@ podkop_remove() {
 
     # sing-box уходит следом: он был движком podkop и без него не нужен,
     # а места занимает больше самого podkop. Настройки движка остаются.
+    #
+    # Имя пакета не одно. podkop-forge ставит сборку с XHTTP, и называется она
+    # sing-box-extended — «apk del sing-box» на неё не действует вовсе, пакет
+    # остаётся на флэш и занимает десятки мегабайт. На живом роутере из-за
+    # этого не хватило места движку. Поэтому снимается всё семейство, а какие
+    # имена в нём есть — спрашивается у менеджера, а не угадывается.
     if [ -x /etc/init.d/sing-box ]; then
         /etc/init.d/sing-box stop > /dev/null 2>&1
         /etc/init.d/sing-box disable > /dev/null 2>&1
     fi
-    pkg_drop sing-box
+
+    for pkg in $(pkg_installed_like 'sing-box'); do
+        pkg_drop "$pkg"
+    done
 
     # Хвосты, до которых stop мог не добраться: если служба уже была сломана,
     # разбирать было некому.
@@ -660,6 +742,15 @@ fi
 
 say "зависимости"
 note "менеджер: $(pkg_format)"
+
+# Черновики менеджера — в память.
+#
+# На большинстве сборок /var и так лежит в tmpfs, но не на всех, а индекс
+# и скачанный архив, записанные на overlay, — ровно та временная запись,
+# которая первой упирается в заполненную флэш. Перенято у podkop.
+export TMPDIR=/tmp
+
+pkg_world_repair
 pkg_list_update || warn "индекс не обновился, ставлю на том, что есть"
 for p in curl jq gzip coreutils-base64 unzip nftables kmod-nft-tproxy; do
     pkg_add "$p" || warn "не поставился: $p"
