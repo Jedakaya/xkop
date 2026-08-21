@@ -249,6 +249,12 @@ update_rollback() {
 # переустановка на ровном месте. Версии сравниваются по строке, которую даёт
 # сам менеджер, и по имени файла в релизе: у них она одна и та же, вида
 # "26.7.28-r1".
+# Спрашивается менеджер, и только он.
+#
+# Версия самого бинарника тут не годится: движок, положенный файлом с ветки,
+# менеджеру неизвестен, и задача обновления — поставить пакет на его место.
+# Счесть «версия та же, качать не буду» значит навсегда оставить роутер
+# с движком, о котором менеджер не знает и который он не обновит.
 update_engine_installed_version() {
     if command -v apk > /dev/null 2>&1; then
         apk list --installed 2> /dev/null \
@@ -257,6 +263,11 @@ update_engine_installed_version() {
         opkg list-installed 2> /dev/null \
             | awk '$1 == "xray-xkop" {print $3; exit}'
     fi
+}
+
+# Без номера нашей сборки: "26.7.28-r1" и "26.7.28" — про один движок.
+update_engine_version_core() {
+    printf '%s' "${1%%-r[0-9]*}"
 }
 
 update_engine_url_version() {
@@ -319,8 +330,9 @@ update_apply() {
 
     # Движок качается, только если он другой.
     if [ -n "$engine_url" ]; then
-        engine_have=$(update_engine_installed_version)
-        engine_want=$(update_engine_url_version "$engine_url" "$arch" "$format")
+        engine_have=$(update_engine_version_core "$(update_engine_installed_version)")
+        engine_want=$(update_engine_version_core \
+            "$(update_engine_url_version "$engine_url" "$arch" "$format")")
 
         if [ -n "$engine_have" ] && [ "$engine_have" = "$engine_want" ]; then
             log_info "движок $engine_have уже стоит, не качаю"

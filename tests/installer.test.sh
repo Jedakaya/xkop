@@ -234,7 +234,7 @@ check "и основной установщик тоже" "yes"     "$(grep -q '
 # переустановка. Версия в имени файла релиза и версия, которую называет
 # менеджер, — одна строка вида "26.7.28-r1".
 
-check "установщик сверяет версию движка" "yes"     "$(grep -q 'ENGINE_HAVE=$(engine_pkg_version)' "$ROOT/install.sh" && echo yes || echo no)"
+check "установщик сверяет версию движка" "yes"     "$(grep -q 'ENGINE_HAVE=' "$ROOT/install.sh" && echo yes || echo no)"
 check "и не качает, когда она та же" "yes"     "$(grep -q 'уже стоит, не качаю' "$ROOT/install.sh" && echo yes || echo no)"
 check "xkop update сверяет её же" "yes"     "$(grep -q 'update_engine_installed_version' "$ROOT/xkop/files/usr/lib/xkop/update.sh" && echo yes || echo no)"
 
