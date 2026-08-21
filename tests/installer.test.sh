@@ -226,6 +226,25 @@ check "и версия не отрезается выражением" "no"     
 check "установщик движка убирает за собой при любом исходе" "yes"     "$(grep -q "trap 'rm -rf \"\$WORK\"' EXIT" "$ROOT/tools/install-xray-dev.sh" && echo yes || echo no)"
 check "и основной установщик тоже" "yes"     "$(grep -q 'rm -rf "$WORK"' "$ROOT/install.sh" && echo yes || echo no)"
 
+# --- движок не качается заново, когда он тот же ------------------------------
+#
+# Пакет движка весит тридцать с лишним мегабайт и качается в оперативную
+# память. Тянуть его при каждом обновлении xkop, когда сам он не менялся, —
+# лишние тридцать мегабайт в памяти роутера, у которого её немного, и лишняя
+# переустановка. Версия в имени файла релиза и версия, которую называет
+# менеджер, — одна строка вида "26.7.28-r1".
+
+check "установщик сверяет версию движка" "yes"     "$(grep -q 'ENGINE_HAVE=$(engine_pkg_version)' "$ROOT/install.sh" && echo yes || echo no)"
+check "и не качает, когда она та же" "yes"     "$(grep -q 'уже стоит, не качаю' "$ROOT/install.sh" && echo yes || echo no)"
+check "xkop update сверяет её же" "yes"     "$(grep -q 'update_engine_installed_version' "$ROOT/xkop/files/usr/lib/xkop/update.sh" && echo yes || echo no)"
+
+# Разбор имени: обе стороны обязаны давать одно и то же.
+have=$(printf 'xray-xkop-26.7.28-r1 aarch64_cortex-a53 {x} (MPL-2.0) [installed]
+'     | awk '/^xray-xkop-/ {print substr($1, 11); exit}')
+want=$(name='xray-xkop-26.7.28-r1-aarch64_cortex-a53.apk'; name="${name#xray-xkop-}"; printf '%s' "${name%-aarch64_cortex-a53.apk}")
+check "версия из менеджера и из имени файла совпадают" "$have" "$want"
+check "и это не пустая строка" "26.7.28-r1" "$have"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

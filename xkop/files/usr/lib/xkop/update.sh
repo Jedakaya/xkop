@@ -241,9 +241,35 @@ update_rollback() {
     return 1
 }
 
+# Версия установленного пакета движка и версия того, что лежит в релизе.
+#
+# Движок весит тридцать с лишним мегабайт и качается в память. Скачивать его
+# при каждом обновлении xkop, когда сам он не менялся, — это лишние тридцать
+# мегабайт в оперативной памяти роутера, у которого её и так немного, и лишняя
+# переустановка на ровном месте. Версии сравниваются по строке, которую даёт
+# сам менеджер, и по имени файла в релизе: у них она одна и та же, вида
+# "26.7.28-r1".
+update_engine_installed_version() {
+    if command -v apk > /dev/null 2>&1; then
+        apk list --installed 2> /dev/null \
+            | awk '/^xray-xkop-/ {print substr($1, 11); exit}'
+    else
+        opkg list-installed 2> /dev/null \
+            | awk '$1 == "xray-xkop" {print $3; exit}'
+    fi
+}
+
+update_engine_url_version() {
+    local name="${1##*/}" arch="$2" format="$3"
+
+    name="${name#xray-xkop-}"
+    name="${name%-$arch.$format}"
+    printf '%s' "$name"
+}
+
 update_apply() {
     local format arch latest installed work engine_url xkop_url luci_url
-    local engine_updated=0
+    local engine_updated=0 engine_have engine_want
 
     format=$(update_pkg_format)
     arch=$(update_router_arch)
@@ -290,7 +316,18 @@ update_apply() {
         return 0
     fi
     [ -n "$luci_url" ] && curl -fsSL --max-time 120 -o "$work/luci.$format" "$luci_url" 2> /dev/null
-    [ -n "$engine_url" ] && curl -fsSL --max-time 300 -o "$work/engine.$format" "$engine_url" 2> /dev/null
+
+    # Движок качается, только если он другой.
+    if [ -n "$engine_url" ]; then
+        engine_have=$(update_engine_installed_version)
+        engine_want=$(update_engine_url_version "$engine_url" "$arch" "$format")
+
+        if [ -n "$engine_have" ] && [ "$engine_have" = "$engine_want" ]; then
+            log_info "движок $engine_have уже стоит, не качаю"
+        else
+            curl -fsSL --max-time 300 -o "$work/engine.$format" "$engine_url" 2> /dev/null
+        fi
+    fi
 
     update_stage_rollback
 

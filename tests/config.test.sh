@@ -317,6 +317,28 @@ out=$(gen_dns '.settings.dns_cache = "0" | .settings.dns_client_ip = "203.0.113.
 check "кэш выключается настройкой" "true" "$(printf '%s' "$out" | "$JQ" -c '.dns.disableCache')"
 check "подсказка о клиенте передана" '"203.0.113.7"'     "$(printf '%s' "$out" | "$JQ" -c '.dns.clientIp')"
 
+# --- локальный резолвер не остаётся один ------------------------------------
+#
+# AdGuard Home или Pi-hole поднимается не мгновенно и не обязательно раньше
+# нас: порядок запуска служб OpenWrt при одинаковом START не определён. Пока
+# он поднимается, спрашивать некого - имена не резолвятся, проверка узлов
+# уходит в никуда, и снаружи это выглядит как «все серверы мёртвые». На живом
+# роутере так и было: через тринадцать минут после старта ни одного замера
+# при полностью исправном туннеле.
+
+out=$(gen_dns '.settings.dns_server = "127.0.0.10" | .settings.dns_extra = []')
+check "рядом с локальным встаёт шифрованный" "true"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | .address? // .] | any(startswith("https://"))')"
+
+out=$(gen_dns '.settings.dns_server = "8.8.8.8" | .settings.dns_extra = []')
+check "внешнему резолверу сосед не навязывается" "2"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | .address? // . | select(. != "fakedns")] | length')"
+
+out=$(gen_dns '.settings.dns_server = "127.0.0.10" | .settings.dns_extra = ["https://1.1.1.1/dns-query"]')
+check "заданный руками сосед не подменяется" "true"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | .address? // .] | any(. == "https://1.1.1.1/dns-query") and (any(. == "https://8.8.8.8/dns-query") | not)')"
+
+# Схема адреса локальность не отменяет.
+out=$(gen_dns '.settings.dns_server = "https://127.0.0.1/dns-query" | .settings.dns_extra = []')
+check "локальный по схеме тоже опознан" "true"     "$(printf '%s' "$out" | "$JQ" -c '[.dns.servers[] | .address? // .] | any(. == "https://8.8.8.8/dns-query")')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

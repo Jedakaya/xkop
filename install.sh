@@ -634,6 +634,25 @@ pkg_drop() {
     fi
 }
 
+# Версия установленного пакета движка, как её называет сам менеджер.
+engine_pkg_version() {
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk list --installed 2> /dev/null \
+            | awk '/^xray-xkop-/ {print substr($1, 11); exit}'
+    else
+        opkg list-installed 2> /dev/null \
+            | awk '$1 == "xray-xkop" {print $3; exit}'
+    fi
+}
+
+# Версия из имени файла в релизе: xray-xkop-26.7.28-r1-<арх>.<формат>.
+engine_url_version() {
+    name="${1##*/}"
+    name="${name#xray-xkop-}"
+    name="${name%-$ARCH.$FORMAT}"
+    printf '%s' "$name"
+}
+
 # Установленные пакеты, чьё имя начинается с этого. Нужно там, где имя пакета
 # зависит от того, кто его собирал: sing-box может называться sing-box,
 # sing-box-extended и как угодно ещё.
@@ -810,6 +829,19 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
 
             # Всё качается в RAM целиком и только потом ставится: отказ
             # на середине загрузки не должен оставлять роутер с половиной.
+            # Движок весит тридцать с лишним мегабайт и качается в память.
+            # Тянуть его при каждом запуске установщика, когда стоит ровно
+            # та же версия, — лишние тридцать мегабайт в оперативной памяти
+            # роутера, у которого её и так немного, и лишняя переустановка
+            # на ровном месте. Версия в имени файла релиза и версия, которую
+            # называет менеджер, — одна и та же строка вида "26.7.28-r1".
+            ENGINE_HAVE=$(engine_pkg_version)
+            ENGINE_WANT=$(engine_url_version "$ENGINE_URL")
+            if [ -n "$ENGINE_HAVE" ] && [ "$ENGINE_HAVE" = "$ENGINE_WANT" ]; then
+                note "движок $ENGINE_HAVE уже стоит, не качаю"
+                ENGINE_URL=""
+            fi
+
             if [ -n "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
                 if download "$ENGINE_URL" "$WORK/engine.$FORMAT"; then
                     # Движок, положенный мимо менеджера, мешает пакету встать,
