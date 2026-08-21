@@ -113,6 +113,40 @@ for c in get_status check_engine stats nodes subscriptions global_check \
 done
 
 echo
+echo "== расписание"
+
+# Задача, вписанная в расписание под именем, которого нет в CLI, не выполняется
+# никогда и молча. Проверяется не наличие строк, а то, что каждая названная
+# команда существует и отрабатывает.
+cron_lines=$(grep -c 'xkop' /etc/crontabs/root 2> /dev/null)
+need "задач в расписании" "${cron_lines:-0}" 5
+
+for c in $(awk '{for (i = 1; i < NF; i++) if ($i ~ /bin.xkop$/) print $(i + 1)}'     /etc/crontabs/root 2> /dev/null | sort -u); do
+    out=$(xkop "$c" 2>&1 | head -c 100)
+    case "$out" in
+        *"not found"* | *"unbound variable"* | *"parameter not set"*)
+            bad "команда из расписания: $c" "$out" ;;
+        *) ok "команда из расписания: $c" ;;
+    esac
+done
+
+echo
+echo "== имена продолжают резолвиться после остановки"
+
+# Резолвер клиентов переключён на движок. Если при остановке он не вернётся
+# обратно, вся сеть остаётся без имён — при том что сам роутер жив и на вид
+# исправен.
+/etc/init.d/xkop stop > /dev/null 2>&1
+sleep 3
+if nslookup ya.ru 127.0.0.1 > /dev/null 2>&1; then
+    ok "после остановки имена резолвятся"
+else
+    bad "после остановки имена резолвятся" "dnsmasq остался смотреть на выключенный движок"
+fi
+/etc/init.d/xkop start > /dev/null 2>&1
+sleep 18
+
+echo
 echo "== замок не отменяет запуск службы"
 
 # Тот самый случай: обновление пакета останавливает службу, а запуск попадает
