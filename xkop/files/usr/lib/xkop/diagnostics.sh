@@ -80,11 +80,41 @@ diag_system_json() {
 # The rules are ours, so the answer is factual: is the table there, and has
 # anything actually gone through it. A table with zero packets on a router that
 # has been up for a day is a different problem from a missing table.
+# Сколько адресов в наборе перехвата и сколько списков задано человеком.
+#
+# Применённые пустыми правила — это не «правила есть». Набор собирается
+# из списков профиля, и если списки прочитались пустыми — а прочитаться
+# пустыми они могут молча, — таблица применяется, счётчики идут, всё выглядит
+# исправным, и при этом весь трафик идёт напрямую.
+#
+# Куплено на живом роутере: строгий режим убил штатные функции OpenWrt,
+# которыми читаются списки uci, конфигурация собралась без единого адреса,
+# а проверка бодро сказала «правила применены».
+diag_nft_elements() {
+    nft list set inet "$XKOP_NFT_TABLE" routed4 2> /dev/null \
+        | tr ',' '\n' | grep -c '[0-9][.][0-9]'
+}
+
+diag_lists_configured() {
+    local id count=0 option
+    for id in $(config_section_ids profile); do
+        for option in community_list domain subnet remote_subnets local_subnets; do
+            count=$((count + $(subscription_config_list "$id" "$option" 2> /dev/null | grep -c .)))
+        done
+    done
+    printf '%s' "$count"
+}
+
 diag_nft_json() {
     local present=0 packets=0 dump reason="" tproxy="unknown"
+    local elements=0 configured=0
 
     if nft_present; then
         present=1
+        elements=$(diag_nft_elements 2> /dev/null)
+        [ -n "$elements" ] || elements=0
+        configured=$(diag_lists_configured 2> /dev/null)
+        [ -n "$configured" ] || configured=0
         dump=$(nft list table inet "$XKOP_NFT_TABLE" 2> /dev/null)
         packets=$(printf '%s' "$dump" | sed -n 's/.*counter packets \([0-9]*\).*/\1/p' \
             | awk '{sum += $1} END {print sum + 0}')
@@ -113,11 +143,19 @@ diag_nft_json() {
         --arg table "$XKOP_NFT_TABLE" \
         --arg reason "$reason" \
         --arg tproxy "$tproxy" \
+        --argjson elements "${elements:-0}" \
+        --argjson configured "${configured:-0}" \
         '{
             ok: true,
             table: $table,
             rules_present: ($present == 1),
             packets_seen: $packets,
+            addresses: $elements,
+            lists_configured: $configured,
+            # Пустой набор при заданных списках — отдельная беда, и она
+            # выглядит как исправность. Названа отдельно, чтобы её было
+            # видно, а не выводить из двух чисел.
+            empty_but_configured: ($present == 1 and $elements == 0 and $configured > 0),
             reason: (if $reason == "" then null else $reason end),
             tproxy_module: $tproxy,
             state: (
@@ -125,6 +163,8 @@ diag_nft_json() {
                     "правил нет: модуль ядра nft_tproxy не установлен"
                 elif ($present == 0) and $reason != "" then "правил нет: " + $reason
                 elif ($present == 0) then "правил нет"
+                elif ($elements == 0) and ($configured > 0) then
+                    "правила применены пустыми: списки заданы, а в наборе ни одного адреса — трафик идёт напрямую"
                 elif $packets == 0 then "правила есть, трафик через них ещё не шёл"
                 else "правила работают"
                 end
@@ -253,6 +293,9 @@ diag_global_json() {
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
                 elif ($nft.rules_present | not) then $nft.state
+                # Пустой набор при заданных списках выглядит как исправность,
+                # и потому обязан попадать в одну строку сверху.
+                elif ($nft.empty_but_configured // false) then $nft.state
                 # «Не готовы» — это когда серверов нет вовсе.
                 #
                 # Неудачное обновление оставляет кэш нетронутым и переводит
@@ -396,6 +439,9 @@ diag_dashboard_json() {
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
                 elif ($nft.rules_present | not) then $nft.state
+                # Пустой набор при заданных списках выглядит как исправность,
+                # и потому обязан попадать в одну строку сверху.
+                elif ($nft.empty_but_configured // false) then $nft.state
                 # «Не готовы» — это когда серверов нет вовсе.
                 #
                 # Неудачное обновление оставляет кэш нетронутым и переводит
