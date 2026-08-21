@@ -209,6 +209,13 @@ check "засор от прошлых попыток чистится до ра�
 # на "apk del sing-box" не реагирует вовсе и остаётся занимать флэш.
 check "снимается всё семейство sing-box" "yes"     "$(grep -q "pkg_installed_like 'sing-box'" "$ROOT/install.sh" && echo yes || echo no)"
 
+# Имя пакета не выкусывается из строки с версией: "sing-box-extended-1.13.18-
+# extended-2.6.4-r1" разбором по первой цифре даёт "sing-box-extended-1.13.18-
+# extended", и apk del на такое имя молча ничего не делает. Именно так пакет
+# и остался на живом роутере.
+check "имя пакета берётся у менеджера, а не выкусывается" "yes"     "$(grep -A 8 '^pkg_installed_like()' "$ROOT/install.sh" | grep -q 'apk info' && echo yes || echo no)"
+check "и версия не отрезается выражением" "no"     "$(grep -A 8 '^pkg_installed_like()' "$ROOT/install.sh" | grep -q 'sed -n' && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
