@@ -216,6 +216,16 @@ check "снимается всё семейство sing-box" "yes"     "$(grep 
 check "имя пакета берётся у менеджера, а не выкусывается" "yes"     "$(grep -A 8 '^pkg_installed_like()' "$ROOT/install.sh" | grep -q 'apk info' && echo yes || echo no)"
 check "и версия не отрезается выражением" "no"     "$(grep -A 8 '^pkg_installed_like()' "$ROOT/install.sh" | grep -q 'sed -n' && echo yes || echo no)"
 
+# --- временные каталоги в оперативной памяти --------------------------------
+#
+# /tmp на роутере — это оперативная память. Архив с движком весит полсотни
+# мегабайт, и уборка, стоящая последней строкой, выполняется только при успехе:
+# отказ на «не хватает места» оставляет эти мегабайты в памяти навсегда.
+# На живом роутере так и вышло — 52 МБ из 484 держал брошенный нами архив.
+
+check "установщик движка убирает за собой при любом исходе" "yes"     "$(grep -q "trap 'rm -rf \"\$WORK\"' EXIT" "$ROOT/tools/install-xray-dev.sh" && echo yes || echo no)"
+check "и основной установщик тоже" "yes"     "$(grep -q 'rm -rf "$WORK"' "$ROOT/install.sh" && echo yes || echo no)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
