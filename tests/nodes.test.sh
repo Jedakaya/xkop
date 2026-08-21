@@ -139,6 +139,20 @@ check "узел, до которого не достучались, остаёт
 check "живой остаётся живым" '"alive"'     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "C") | .state')"
 check "достижимость названа отдельным полем" "true"     "$(printf '%s' "$out" | "$JQ" -c '.nodes[] | select(.tag == "A") | .reachable')"
 
+# Число проверок отличает мёртвый узел от непроверенного, и оно терялось
+# при пересборке объекта: столбец «проверок» в панели был пуст всегда.
+cmd_stats() {
+    printf '%s' '{"observatory":{"nodes":[{"tag":"C","state":"alive","delay_ms":80,
+                                           "probes":3,"failures":1,"last_error":null}]}}'
+}
+subscription_pool_all() {
+    printf '%s' '[{"tag":"C","protocol":"vless","subscription":"main"}]'
+}
+
+out=$(nodes_json)
+check "число проверок доходит до панели" "3"     "$(printf '%s' "$out" | "$JQ" -c '.nodes[0].probes')"
+check "и число отказов тоже" "1"     "$(printf '%s' "$out" | "$JQ" -c '.nodes[0].failures')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]
