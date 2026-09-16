@@ -98,7 +98,10 @@ lists_subnet_path() {
 lists_subnet_fetch() {
     local category="$1" name target tmp
 
-    lists_subnet_has "$category" || return 0
+    # Нет файла подсетей — нечему и меняться. Ноль здесь означал «изменилось»,
+    # и профиль по умолчанию (russia-inside, geoblock) перезапускал службу
+    # через двадцать секунд после каждого старта.
+    lists_subnet_has "$category" || return 3
 
     name=$(lists_subnet_name "$category")
     target=$(lists_subnet_path "$category")
@@ -143,6 +146,26 @@ lists_subnet_entries() {
 # как было. По этому вызывающий и решает, пересобирать ли конфигурацию:
 # перезапускать службу ради того же самого файла значит рвать соединения
 # ни за чем.
+# Когда списки проверяли в последний раз.
+#
+# «Обновлено» и «проверено» — разные вещи, и путать их нельзя. Файл
+# переписывается только когда содержимое изменилось, а списки сообщества
+# меняются раз в недели. Показывать время файла как время обновления значит
+# уверять человека, что обновление не работает, — ровно это и произошло:
+# в панели неделями стоит «2 дн назад», хотя проверка идёт каждый день.
+lists_checked_path() {
+    printf '%s/checked' "$(lists_subnet_dir)"
+}
+
+lists_mark_checked() {
+    mkdir -p "$(lists_subnet_dir)" 2> /dev/null
+    date +%s > "$(lists_checked_path)" 2> /dev/null
+}
+
+lists_checked_at() {
+    cat "$(lists_checked_path)" 2> /dev/null
+}
+
 lists_subnets_update() {
     local profile category changed=0
     command -v uci > /dev/null 2>&1 || return 2
@@ -153,6 +176,10 @@ lists_subnets_update() {
             lists_subnet_fetch "$category" && changed=1
         done
     done
+
+    # Отметка ставится независимо от того, изменилось ли что-нибудь: она
+    # отвечает на вопрос «когда спрашивали», а не «когда поменялось».
+    lists_mark_checked
 
     [ "$changed" -eq 1 ] && return 0
     return 2
@@ -290,6 +317,7 @@ lists_status_json() {
         --argjson geosite_updated "$(date -r "$target" +%s 2> /dev/null || echo 0)" \
         --argjson subnets "$(cat "$XKOP_RUN_DIR/subnet-status.json" 2> /dev/null || echo '[]')" \
         --argjson categories "$(printf '%s' "$used" | jq -R -s -c 'split("\n") | map(select(. != ""))')" \
+        --argjson checked "$(lists_checked_at 2> /dev/null || echo 0)" \
         '{
             ok: true,
             geosite: {
@@ -297,6 +325,10 @@ lists_status_json() {
                 size_bytes: $geosite_size,
                 updated: (if $geosite_updated == 0 then null else $geosite_updated end)
             },
+            # Когда списки спрашивали в последний раз. Это не то же самое,
+            # что время файла: файл переписывается только при изменении
+            # содержимого, а списки сообщества меняются раз в недели.
+            checked: (if $checked == 0 then null else $checked end),
             categories: $categories,
             subnets: $subnets,
             missing: [ $subnets[] | select(.ready | not) | .category ]

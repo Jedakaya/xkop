@@ -83,15 +83,23 @@ function renderLists(lists) {
   const subs = lists.subnets || [];
   const missing = lists.missing || [];
 
+  // «Проверено» и «изменилось» — разные вещи, и путать их нельзя.
+  //
+  // Файл списка переписывается только когда содержимое изменилось, а списки
+  // сообщества меняются раз в недели. Показывая время файла как время
+  // обновления, панель уверяла, что обновление не работает: неделями стояло
+  // «2 дн назад», хотя проверка шла каждый день.
   const rows = [
+    line(_("проверялись"), lists.checked ? when(lists.checked) : _("ещё нет"),
+      _("списки спрашиваются ежедневно")),
     line(_("имена"), g.present ? api.bytes(g.size_bytes) : _("нет"),
-      g.updated ? when(g.updated) : ""),
+      g.updated ? _("менялись ") + when(g.updated) : ""),
   ];
 
   subs.forEach(function (s) {
     rows.push(line(s.category,
       s.ready ? s.subnets + _(" подсетей") : _("не приехали"),
-      s.updated ? when(s.updated) : ""));
+      s.updated ? _("менялись ") + when(s.updated) : ""));
   });
 
   if (!subs.length && (lists.categories || []).length) {

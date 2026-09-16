@@ -61,6 +61,36 @@ check "имя файла с подчёркиванием" "google_meet" "$(lists
 check "у google-meet подсети есть" "yes" \
     "$(lists_subnet_has google-meet && echo yes || echo no)"
 
+# --- «изменилось» только когда изменилось ---------------------------------
+
+# Профиль по умолчанию — категории без подсетей. Раньше их пропуск считался
+# изменением, и фоновая проверка перезапускала службу после каждого старта.
+uci() {
+    case "$*" in
+        "-q show xkop") printf "xkop.blocked_ru=profile\n" ;;
+        "-q get xkop.blocked_ru.community_list") printf 'russia-inside geoblock\n' ;;
+    esac
+}
+lists_download() { return 1; }
+lists_subnets_update
+check "категории без подсетей — не изменение" "2" "$?"
+
+lists_download() {
+    printf '1.2.3.0/24\n' > "$2"
+}
+uci() {
+    case "$*" in
+        "-q show xkop") printf "xkop.blocked_ru=profile\n" ;;
+        "-q get xkop.blocked_ru.community_list") printf 'russia-inside telegram\n' ;;
+    esac
+}
+lists_subnets_update
+check "новый файл подсетей — изменение" "0" "$?"
+lists_subnets_update
+check "тот же файл второй раз — не изменение" "2" "$?"
+rm -rf "$(lists_subnet_dir)"
+unset -f uci
+
 # --- чтение кэша ----------------------------------------------------------
 
 mkdir -p "$(lists_subnet_dir)"

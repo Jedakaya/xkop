@@ -80,26 +80,41 @@ diag_system_json() {
 # The rules are ours, so the answer is factual: is the table there, and has
 # anything actually gone through it. A table with zero packets on a router that
 # has been up for a day is a different problem from a missing table.
-# Сколько адресов в наборе перехвата и сколько списков задано человеком.
+# Сколько правил движка ведут в туннель и сколько списков для туннеля задано.
 #
-# Применённые пустыми правила — это не «правила есть». Набор собирается
-# из списков профиля, и если списки прочитались пустыми — а прочитаться
-# пустыми они могут молча, — таблица применяется, счётчики идут, всё выглядит
-# исправным, и при этом весь трафик идёт напрямую.
+# Правила, собранные пустыми, — это не «правила есть». Если списки uci
+# прочитались пустыми — а прочитаться пустыми они могут молча, — таблица nft
+# применяется, счётчики идут, всё выглядит исправным, и при этом весь трафик
+# идёт напрямую. Куплено на живом роутере: строгий режим убил штатные функции
+# OpenWrt, которыми читаются списки uci.
 #
-# Куплено на живом роутере: строгий режим убил штатные функции OpenWrt,
-# которыми читаются списки uci, конфигурация собралась без единого адреса,
-# а проверка бодро сказала «правила применены».
-diag_nft_elements() {
-    nft list set inet "$XKOP_NFT_TABLE" routed4 2> /dev/null \
-        | tr ',' '\n' | grep -c '[0-9][.][0-9]'
+# Смотреть надо в конфигурацию движка, а не в набор nft. При сплошном
+# перехвате набора нет вовсе, и проверка по нему кричала о поломке на
+# исправном роутере. При выборочном в наборе всегда лежит диапазон FakeIP,
+# и настоящую поломку она не увидела бы никогда.
+diag_routed_rules() {
+    jq '[.routing.rules[]?
+         | select(((.domain // []) | length) + ((.ip // []) | length) > 0)
+         | select(.balancerTag != null
+             or ((.outboundTag // "") as $t
+                 | ["direct", "block", "dns-out", "metrics-out"] | index($t) | not))]
+        | length' "$XKOP_CONFIG_PATH" 2> /dev/null
 }
 
+# Списки только тех профилей, что привязаны к туннелю: профиль «напрямую»
+# правила в туннель не даёт, и спрашивать с него нечего.
 diag_lists_configured() {
-    local id count=0 option
-    for id in $(config_section_ids profile); do
+    local id channel profile option count=0
+    for id in $(config_section_ids binding); do
+        channel=$(config_uci_get "$id" channel)
+        [ -n "$channel" ] || continue
+        case "$(config_uci_get "$channel" type)" in
+            '' | direct | block) continue ;;
+        esac
+        profile=$(config_uci_get "$id" profile)
+        [ -n "$profile" ] || continue
         for option in community_list domain subnet remote_subnets local_subnets; do
-            count=$((count + $(subscription_config_list "$id" "$option" 2> /dev/null | grep -c .)))
+            count=$((count + $(subscription_config_list "$profile" "$option" 2> /dev/null | grep -c .)))
         done
     done
     printf '%s' "$count"
@@ -111,7 +126,7 @@ diag_nft_json() {
 
     if nft_present; then
         present=1
-        elements=$(diag_nft_elements 2> /dev/null)
+        elements=$(diag_routed_rules)
         [ -n "$elements" ] || elements=0
         configured=$(diag_lists_configured 2> /dev/null)
         [ -n "$configured" ] || configured=0
@@ -150,9 +165,9 @@ diag_nft_json() {
             table: $table,
             rules_present: ($present == 1),
             packets_seen: $packets,
-            addresses: $elements,
+            routed_rules: $elements,
             lists_configured: $configured,
-            # Пустой набор при заданных списках — отдельная беда, и она
+            # Пустые правила при заданных списках — отдельная беда, и она
             # выглядит как исправность. Названа отдельно, чтобы её было
             # видно, а не выводить из двух чисел.
             empty_but_configured: ($present == 1 and $elements == 0 and $configured > 0),
@@ -164,7 +179,7 @@ diag_nft_json() {
                 elif ($present == 0) and $reason != "" then "правил нет: " + $reason
                 elif ($present == 0) then "правил нет"
                 elif ($elements == 0) and ($configured > 0) then
-                    "правила применены пустыми: списки заданы, а в наборе ни одного адреса — трафик идёт напрямую"
+                    "правила пустые: списки заданы, а в конфигурации движка ни одного правила в туннель — трафик идёт напрямую"
                 elif $packets == 0 then "правила есть, трафик через них ещё не шёл"
                 else "правила работают"
                 end
@@ -293,7 +308,7 @@ diag_global_json() {
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
                 elif ($nft.rules_present | not) then $nft.state
-                # Пустой набор при заданных списках выглядит как исправность,
+                # Пустые правила при заданных списках выглядят как исправность,
                 # и потому обязан попадать в одну строку сверху.
                 elif ($nft.empty_but_configured // false) then $nft.state
                 # «Не готовы» — это когда серверов нет вовсе.
@@ -439,7 +454,7 @@ diag_dashboard_json() {
                 elif ($status.engine.running | not) then "движок не запущен"
                 elif ($status.engine.answering | not) then "движок запущен, но не отвечает"
                 elif ($nft.rules_present | not) then $nft.state
-                # Пустой набор при заданных списках выглядит как исправность,
+                # Пустые правила при заданных списках выглядят как исправность,
                 # и потому обязан попадать в одну строку сверху.
                 elif ($nft.empty_but_configured // false) then $nft.state
                 # «Не готовы» — это когда серверов нет вовсе.

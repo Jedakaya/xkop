@@ -82,8 +82,17 @@ echo "== правила на роутере"
 
 if nft list table inet xkop > /dev/null 2>&1; then
     ok "таблица nft на месте"
-    elements=$(nft list set inet xkop routed4 2> /dev/null | tr ',' '\n' | grep -c '[0-9][.][0-9]')
-    need "адресов в наборе перехвата" "$elements" 1
+    # Перехват есть в обоих режимах: сплошной метит всё, выборочный — набор
+    # routed4. При сплошном набора нет, и считать его адреса бессмысленно.
+    marks=$(nft list chain inet xkop mangle 2> /dev/null | grep -c 'meta mark set')
+    need "правил перехвата" "$marks" 1
+    nft_state=$(xkop check_nft_rules 2> /dev/null)
+    need "правил движка в туннель" "$(printf '%s' "$nft_state" | jq -r '.routed_rules // 0')" 1
+    if [ "$(printf '%s' "$nft_state" | jq -r '.empty_but_configured')" = "false" ]; then
+        ok "диагностика не называет правила пустыми"
+    else
+        bad "диагностика не называет правила пустыми" "$(printf '%s' "$nft_state" | jq -r '.state')"
+    fi
 else
     bad "таблица nft на месте" "таблицы нет — трафик идёт напрямую"
 fi
@@ -187,8 +196,8 @@ echo "$held" > /tmp/xkop/lock-work/pid
 sleep 20
 
 if nft list table inet xkop > /dev/null 2>&1; then
-    elements=$(nft list set inet xkop routed4 2> /dev/null | tr ',' '\n' | grep -c '[0-9][.][0-9]')
-    need "правила вернулись при занятом замке" "$elements" 1
+    marks=$(nft list chain inet xkop mangle 2> /dev/null | grep -c 'meta mark set')
+    need "правила вернулись при занятом замке" "$marks" 1
 else
     bad "правила вернулись при занятом замке" "таблицы нет"
 fi

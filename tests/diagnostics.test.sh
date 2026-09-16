@@ -58,6 +58,56 @@ nft() { echo "        counter packets 1200 bytes 900000"; echo "        counter 
 check "трафик через правила шёл" "правила работают" "$(diag_nft_json | jq -r '.state')"
 check "пакеты просуммированы" "1500" "$(diag_nft_json | jq -r '.packets_seen')"
 
+# --- пустые правила при заданных списках ----------------------------------
+
+# Туннель задан, в профиле два списка сообщества.
+config_section_ids() { [ "$1" = "binding" ] && echo b1; }
+config_uci_get() {
+    case "$1.$2" in
+        b1.channel) echo tunnel ;;
+        tunnel.type) echo subscription ;;
+        b1.profile) echo blocked_ru ;;
+    esac
+}
+subscription_config_list() {
+    [ "$2" = "community_list" ] && printf 'russia-inside\ngeoblock\n'
+    return 0
+}
+XKOP_CONFIG_PATH="$XKOP_RUN_DIR/config.json"
+
+# Сплошной перехват: набора адресов в nft нет вовсе, и это исправно.
+# Проверка по набору называла такой роутер сломанным.
+cat > "$XKOP_CONFIG_PATH" << 'EOF'
+{"routing": {"rules": [
+  {"type": "field", "outboundTag": "direct", "ip": ["10.0.0.0/8"]},
+  {"type": "field", "domain": ["geosite:russia-inside"], "balancerTag": "pool"}
+]}}
+EOF
+check "правило в туннель есть — не пустые" "false" \
+    "$(diag_nft_json | jq -r '.empty_but_configured')"
+check "правило в туннель посчитано" "1" "$(diag_nft_json | jq -r '.routed_rules')"
+
+# Списки прочитались пустыми: в конфигурации только локальные сети напрямую.
+cat > "$XKOP_CONFIG_PATH" << 'EOF'
+{"routing": {"rules": [
+  {"type": "field", "outboundTag": "direct", "ip": ["10.0.0.0/8"]},
+  {"type": "field", "port": 853, "outboundTag": "block"}
+]}}
+EOF
+check "списки заданы, правил в туннель нет — пустые" "true" \
+    "$(diag_nft_json | jq -r '.empty_but_configured')"
+
+# Профиль привязан к «напрямую»: правил в туннель от него и не должно быть.
+config_uci_get() {
+    case "$1.$2" in
+        b1.channel) echo direct ;;
+        direct.type) echo direct ;;
+        b1.profile) echo blocked_ru ;;
+    esac
+}
+check "профиль напрямую — не поломка" "false" \
+    "$(diag_nft_json | jq -r '.empty_but_configured')"
+
 # --- поддельные адреса ---------------------------------------------------
 
 config_uci_get() { [ "$2" = "dns_mode" ] && echo "off"; }
