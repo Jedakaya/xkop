@@ -90,6 +90,32 @@ check "socks4 отброшен" "unsupported_scheme" "$(reason 'socks4://')"
 check "ссылка без порта отброшена" "no_port" "$(reason 'noport.example.com')"
 check "мусорная строка отброшена" "unreadable" "$(reason 'мусора')"
 
+# --- узлы без шифрования ---------------------------------------------------
+#
+# Движок 26.9.9 не собирает vless и trojan без TLS на внешний адрес, и один
+# такой узел отвергает всю конфигурацию. Правило сверено с движком на двухстах
+# сочетаниях адресов и протоколов.
+
+enc() { printf '%s' "$1" | "$JQ" -r --arg mode links --arg subscription main --arg format link-list \
+    -R -s -f "$PROGRAM" | "$JQ" -r '[(.servers | length), ((.skipped[0].reason) // "-")] | join(" ")'; }
+
+U=b831381d-6324-4d53-ad4f-8cda48b30811
+check "vless без tls на внешний домен отброшен" "0 no_encryption" "$(enc "vless://$U@vpn.example.com:443?type=tcp#a")"
+check "vless без tls на внешний адрес отброшен" "0 no_encryption" "$(enc "vless://$U@8.8.8.8:443?security=none#a")"
+check "trojan без tls отброшен" "0 no_encryption" "$(enc "trojan://pw@vpn.example.com:443?security=none#a")"
+check "vless без tls в локальной сети оставлен" "1 -" "$(enc "vless://$U@192.168.1.10:443?type=tcp#a")"
+check "vless без tls на .lan оставлен" "1 -" "$(enc "vless://$U@box.lan:443?type=tcp#a")"
+check "vless с tls оставлен" "1 -" "$(enc "vless://$U@vpn.example.com:443?security=tls&sni=vpn.example.com#a")"
+
+# Пул из кэша, собранный прежней версией, проходит через merge.
+merged=$(printf '[[{"tag":"a","key":["vless","8.8.8.8",443,"x"],"rank":1,"subscription":"main",
+  "outbound":{"protocol":"vless","settings":{"vnext":[{"address":"8.8.8.8","port":443,"users":[{"id":"x","encryption":"none"}]}]}}},
+ {"tag":"b","key":["vless","8.8.4.4",443,"x"],"rank":1,"subscription":"main",
+  "outbound":{"protocol":"vless","settings":{"vnext":[{"address":"8.8.4.4","port":443,"users":[{"id":"x","encryption":"none"}]}]},
+              "streamSettings":{"security":"reality"}}}]]' \
+    | "$JQ" -c --arg mode merge --arg subscription main --arg format x -f "$PROGRAM" | "$JQ" -r '[.[].tag] | join(",")')
+check "из кэша: без шифрования отсеян, reality остался" "b" "$merged"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

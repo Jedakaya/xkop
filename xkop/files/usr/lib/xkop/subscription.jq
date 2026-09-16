@@ -449,6 +449,79 @@ def link_outbound($parsed):
         skipped($parsed.link; "unsupported_scheme")
       end;
 
+# Узел, который движок с 26.9.9 не соберёт: vless и trojan без TLS на внешний
+# адрес. Отказ одного узла — отказ всей конфигурации, поэтому такой узел
+# отсеивается здесь, с причиной.
+#
+# Правило перенесено из infra/conf/xray.go (validateOutboundTransportSecurity)
+# и common/geodata/consts.go версии 26.9.9 и проверено на самом движке:
+# security "none" не спасает, vless с encryption, отличным от none, проходит,
+# vmess и shadowsocks правило не трогает. Частные адреса и домены — ровно
+# список движка, регулярных выражений здесь нет: jq в OpenWrt собран без них.
+def ipv4_private($a):
+    ($a | split(".")) as $p
+    | if ($p | length) != 4 then null
+      else
+        ($p | map(tonumber? // null)) as $n
+        | if ($n | any(. == null or . < 0 or . > 255)) then null
+          else
+            ($n[0] * 16777216 + $n[1] * 65536 + $n[2] * 256 + $n[3]) as $ip
+            | [ [0, 8], [167772160, 8], [1681915904, 10], [2130706432, 8],
+                [2851995648, 16], [2886729728, 12], [3221225472, 24],
+                [3221225984, 24], [3227017984, 24], [3232235520, 16],
+                [3323068416, 15], [3325256704, 24], [3405803776, 24],
+                [3758096384, 3] ]
+            | any(.[]; . as [$net, $bits]
+                  | pow(2; 32 - $bits) as $size
+                  | (($ip / $size) | floor) == (($net / $size) | floor))
+          end
+      end;
+
+def ipv6_private($a):
+    ($a | ascii_downcase | ltrimstr("[") | rtrimstr("]")) as $v
+    | $v == "::" or $v == "::1"
+      or ($v | startswith("fc")) or ($v | startswith("fd"))
+      or ($v | startswith("fe8")) or ($v | startswith("fe9"))
+      or ($v | startswith("fea")) or ($v | startswith("feb"))
+      or ($v | startswith("ff"));
+
+def dotless_label($d):
+    ($d | explode) as $c
+    | ($c | length) >= 1 and ($c | length) <= 63
+      and $c[0] >= 97 and $c[0] <= 122
+      and ($c[-1] != 45)
+      and all($c[]; (. >= 97 and . <= 122) or (. >= 48 and . <= 57) or . == 45);
+
+def domain_private($a):
+    ($a | ascii_downcase | rtrimstr(".")) as $d
+    | dotless_label($d)
+      or any(("lan", "localdomain", "example", "invalid", "localhost", "test",
+              "local", "home.arpa", "internal");
+             . as $s | $d == $s or ($d | endswith("." + $s)));
+
+def address_private($a):
+    if ($a | type) != "string" or $a == "" then true
+    elif ($a | contains(":")) then ipv6_private($a)
+    else (ipv4_private($a)) as $v4
+         | if $v4 == null then domain_private($a) else $v4 end
+    end;
+
+def needs_encryption:
+    (.protocol // "") as $proto
+    | ((.streamSettings.security // "") | ascii_downcase) as $sec
+    | if $sec != "" and $sec != "none" then false
+      elif $proto == "vless" then
+          ((.settings.encryption // .settings.vnext[0].users[0].encryption? // "none") | ascii_downcase) as $enc
+          | if $enc != "" and $enc != "none" then false
+            else (address_private(.settings.address // .settings.vnext[0].address?) | not)
+            end
+      elif $proto == "trojan" then
+          (address_private(.settings.servers[0].address? // .settings.address) | not)
+      else false
+      end;
+
+def drop_unencrypted: map(select(.outbound | needs_encryption | not));
+
 def from_links($subscription):
     [ split("\n")[] | trim | select(. != "") ]
     | reduce .[] as $line (
@@ -462,6 +535,8 @@ def from_links($subscription):
             (link_outbound($parsed)) as $built
             | if $built.reason != null then
             .skipped += [$built]
+          elif ($built | needs_encryption) then
+            .skipped += [ skipped($parsed.link; "no_encryption") ]
           else
             .servers += [
                 server($subscription; "link-list";
@@ -486,9 +561,10 @@ def is_placeholder:
 
 def drop_placeholders: map(select(is_placeholder | not));
 
+
 def pool($subscription; $format):
-    if $format == "xray-config-list" then from_xray_config_list($subscription) | drop_placeholders
-    elif $format == "xray-json" then from_xray_json($subscription) | drop_placeholders
+    if $format == "xray-config-list" then from_xray_config_list($subscription) | drop_placeholders | drop_unencrypted
+    elif $format == "xray-json" then from_xray_json($subscription) | drop_placeholders | drop_unencrypted
     else []
     end;
 
@@ -553,6 +629,9 @@ def apply_filters:
 
 def merge:
     add
+    # Здесь, а не только при разборе: пул из кэша, собранный прежней версией,
+    # тоже попадает в конфигурацию.
+    | drop_unencrypted
     | apply_filters
     | dedupe
     | sort_by(.subscription, .tag, (.key | tojson))

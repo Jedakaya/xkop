@@ -447,9 +447,11 @@ def direct_domain_strategy:
 
 def service_outbounds:
     [
-        ({tag: service_tags.direct, protocol: "freedom",
-          settings: {domainStrategy: direct_domain_strategy}}
-         + (if (output_sockopt | length) > 0 then {streamSettings: output_sockopt} else {} end)),
+        # В sockopt, а не в settings: freedom.domainStrategy движок 26.9.9
+        # объявил устаревшим и обещает удалить. 26.7.28 принимает оба места.
+        {tag: service_tags.direct, protocol: "freedom",
+         streamSettings: {sockopt: ({domainStrategy: direct_domain_strategy}
+                                    + (output_sockopt.sockopt // {}))}},
         {tag: service_tags.block, protocol: "blackhole"}
     ]
     + (if fakeip_enabled then [ {tag: service_tags.dns, protocol: "dns"} ] else [] end);

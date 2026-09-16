@@ -38,8 +38,13 @@ subscription_decompress_gzip() {
 # Decodes the link list to one trimmed URI per line. Panels differ in the
 # alphabet and in whether they pad, so a strict decoder alone loses whole
 # subscriptions: the url-safe alphabet is retried with padding restored.
+#
+# Байты перечислены диапазоном, а не классами. busybox tr на OpenWrt 25.12
+# классов [:print:] и [:graph:] не знает и не удаляет ничего: любой ответ
+# выходил «двоичным», и подписка списком ссылок на роутере не распознавалась
+# вовсе — при зелёных проверках на машине разработчика с GNU tr.
 subscription_looks_binary() {
-    [ "$(LC_ALL=C tr -d '[:print:][:space:]' < "$1" | wc -c | tr -d ' ')" -gt 0 ]
+    [ "$(LC_ALL=C tr -d '\040-\176\011\012\015' < "$1" | wc -c | tr -d ' ')" -gt 0 ]
 }
 
 subscription_decode_link_list() {
@@ -51,7 +56,9 @@ subscription_decode_link_list() {
     # bytes and say so on stderr.
     subscription_looks_binary "$file" && return 0
 
-    blob=$(tr -d '[:space:]' < "$file")
+    # Не '[:space:]': busybox tr классов не знает и удаляет буквы
+    # s, p, a, c, e — base64 превращался в мусор.
+    blob=$(tr -d ' \t\n\r' < "$file")
     [ -n "$blob" ] || return 0
 
     # The alphabet is normalized BEFORE decoding, always - never as a retry

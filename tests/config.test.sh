@@ -167,6 +167,12 @@ check "интерфейс наружу проставлен прямому ис�
 dns_case '{"dns_extra": []}'
 check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.interface // null')"
 
+# freedom.domainStrategy движок 26.9.9 объявил устаревшим и обещает удалить.
+check "стратегия прямого исходящего в sockopt" '"UseIP"' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.domainStrategy')"
+check "и не в settings" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .settings.domainStrategy? // null')"
+dns_case '{"output_interface": "wan2", "dns_extra": []}'
+check "интерфейс и стратегия уживаются" '["wan2","UseIP"]' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | [.streamSettings.sockopt.interface, .streamSettings.sockopt.domainStrategy]')"
+
 # --- метка собственного трафика движка ------------------------------------
 #
 # Без неё получается петля: движок отправляет соединение наружу, правило

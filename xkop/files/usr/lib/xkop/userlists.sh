@@ -54,7 +54,9 @@ userlist_clean_subnets() {
 userlist_flatten_json() {
     local file="$1"
 
-    case "$(head -c 200 "$file" 2> /dev/null | tr -d '[:space:]' | cut -c1)" in
+    # Не '[:space:]': busybox tr классов не знает и удаляет сами символы
+    # из набора, в том числе «[» — массив переставал быть документом.
+    case "$(head -c 200 "$file" 2> /dev/null | tr -d ' \t\n\r' | cut -c1)" in
         '{' | '[') ;;
         *) return 1 ;;
     esac
