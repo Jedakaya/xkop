@@ -276,8 +276,11 @@ XKOP_SOURCE_SUFFIXES='/json /v2ray-json ='
 # splitting, which is good enough for tests and never runs in production.
 subscription_config_list() {
     local section="$1" option="$2"
+    # Путь переопределяется только в проверках: на роутере с настоящим файлом
+    # чтение шло бы мимо заглушки uci, и проверка видела бы живые настройки.
+    local functions="${XKOP_OPENWRT_FUNCTIONS:-/lib/functions.sh}"
 
-    if [ -f /lib/functions.sh ]; then
+    if [ -f "$functions" ]; then
         # Штатные функции OpenWrt не рассчитаны на строгий режим.
         #
         # При set -u они умирают на первой же необъявленной переменной:
@@ -294,7 +297,7 @@ subscription_config_list() {
         # а не отменяется целиком.
         set +u
         # shellcheck source=/dev/null
-        . /lib/functions.sh
+        . "$functions"
         config_load "$XKOP_CONFIG" 2> /dev/null
         config_list_foreach "$section" "$option" _subscription_print_item
         set -u

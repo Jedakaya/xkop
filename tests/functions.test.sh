@@ -108,17 +108,23 @@ check "и ловит только настоящий вызов" "lists_ghost" "
 # напрямую, при внешне исправной службе. Проверки этого не увидели: в них
 # эта функция подменена.
 
+# Путь может стоять и переменной — страж обязан узнавать обе записи, иначе
+# перенос пути в переменную молча выключает проверку, что однажды и случилось.
+sourced=0
 for f in "$LIB"/*.sh; do
-    grep -n '^\s*\. /lib/functions.sh' "$f" > /dev/null 2>&1 || continue
+    grep -nE '^\s*\. ("\$functions"|/lib/functions\.sh)' "$f" > /dev/null 2>&1 || continue
+    sourced=$((sourced + 1))
 
     # Строка со снятием строгости обязана стоять ВЫШЕ подключения.
     guarded=$(awk '
         /set \+u/ { off = NR }
-        /^[[:space:]]*\. \/lib\/functions\.sh/ { print (off > 0 && NR - off < 12) ? "yes" : "no"; exit }
+        /^[[:space:]]*\. ("\$functions"|\/lib\/functions\.sh)/ { print (off > 0 && NR - off < 12) ? "yes" : "no"; exit }
     ' "$f")
 
     check "штатные функции OpenWrt подключаются без строгого режима ($(basename "$f"))"         "yes" "$guarded"
 done
+
+check "страж нашёл подключение штатных функций" "yes" "$([ "$sourced" -gt 0 ] && echo yes || echo no)"
 
 echo "$((total - failed))/$total"
 

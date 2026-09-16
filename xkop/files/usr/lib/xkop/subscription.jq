@@ -20,7 +20,7 @@
 #          {servers, skipped}
 #   merge  input is an array of pools, output is the deduplicated pool
 
-def reserved_tags: ["direct", "block", "dns-out", "metrics-out", "api"];
+def reserved_tags: ["direct", "block", "dns-out", "metrics-out", "resolver-out", "api"];
 
 # Outbound protocols that carry no traffic of ours. Names taken from the engine
 # itself (infra/conf/xray.go outboundConfigLoader), including the aliases:

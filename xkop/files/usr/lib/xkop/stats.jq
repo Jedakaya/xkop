@@ -29,7 +29,7 @@
 #     reports alive=false with all=0. That is the ten-minute window of a freshly
 #     added outbound, and it must not be shown as dead.
 
-def service_tags: ["dns-out", "metrics-out", "api"];
+def service_tags: ["dns-out", "metrics-out", "resolver-out", "api"];
 
 # Reserved outbound tags of a generated xkop configuration. Everything else is
 # a proxy node.

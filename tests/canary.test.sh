@@ -78,6 +78,9 @@ export PATH
 
 XKOP_TEST_UCI="$work/uci.txt"
 export XKOP_TEST_UCI
+# На роутере /lib/functions.sh есть, и списки читались бы из настоящего uci.
+XKOP_OPENWRT_FUNCTIONS="$work/no-functions.sh"
+export XKOP_OPENWRT_FUNCTIONS
 printf 'xkop.settings=settings\nxkop.settings.canary_enabled=1\n' > "$XKOP_TEST_UCI"
 
 XKOP_LIB_DIR="$LIB"

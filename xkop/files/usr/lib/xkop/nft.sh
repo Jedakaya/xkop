@@ -28,7 +28,7 @@
 
 nft_ruleset() {
     local interfaces="$1" excluded="$2" fakeip="${3:-0}" exclude_ntp="${4:-0}"
-    local routed="${5:-}"
+    local routed="${5:-}" block_dot="${6:-0}"
     local ifname_elements="" excluded_elements="" routed_elements=""
 
     for iface in $interfaces; do
@@ -151,6 +151,12 @@ cat << PICK
         # подсети профилей известны и так. По адресу видно, кого перехватывать.
         ip daddr @routed4 meta l4proto { tcp, udp } meta mark set $XKOP_NFT_MARK counter
 PICK
+if [ "$block_dot" = "1" ]; then
+cat << DOT
+        # Порт 853 - только DNS (DoT и DoQ): отдаётся движку, там он блокируется.
+        meta l4proto { tcp, udp } th dport 853 meta mark set $XKOP_NFT_MARK counter
+DOT
+fi
 else
 cat << ALL
         # Имя видно только внутри соединения, поэтому через движок обязано
@@ -299,7 +305,7 @@ nft_routed_contains() {
 }
 
 nft_apply() {
-    local interfaces excluded fakeip=0 exclude_ntp=0 routed=""
+    local interfaces excluded fakeip=0 exclude_ntp=0 routed="" block_dot=0
 
     [ "$(config_uci_get settings dns_mode 2> /dev/null)" = "fakeip" ] && fakeip=1
     [ "$(config_uci_get settings exclude_ntp 2> /dev/null)" = "1" ] && exclude_ntp=1
@@ -315,6 +321,17 @@ nft_apply() {
     # userspace идёт весь интернет.
     if [ "$fakeip" = "1" ]         && [ "$(config_uci_get settings intercept 2> /dev/null)" != "all" ]; then
         routed=$(nft_routed_addresses)
+
+        # Защита от клиентских DoH живёт в движке, а при выборочном перехвате
+        # 8.8.8.8 до движка не доходит вовсе: галочка стояла, клиентский DoH
+        # отвечал. Проверено на стенде. Поэтому адреса из того же правила
+        # блокировки и порт 853 при включённой защите тоже отдаются движку.
+        if [ "$(config_uci_get settings block_client_doh 2> /dev/null)" = "1" ]; then
+            routed="$routed $(jq -r '.routing.rules[]?
+                | select(.port? == 443 and .outboundTag? == "block") | .ip[]?' \
+                "$XKOP_CONFIG_PATH" 2> /dev/null | tr '\n' ' ')"
+            block_dot=1
+        fi
     fi
 
     interfaces=$(subscription_config_list settings source_interface | tr '\n' ' ')
@@ -328,7 +345,7 @@ nft_apply() {
 
     nft delete table inet "$XKOP_NFT_TABLE" 2> /dev/null || true
 
-    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "$routed"         | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "$routed" "$block_dot"         | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
 
         # Отказ набора — это роутер без маршрутизации, поэтому вторая попытка
         # без выборочного перехвата. Она проще: ни одного значения снаружи,

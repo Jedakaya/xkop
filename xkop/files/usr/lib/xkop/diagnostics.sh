@@ -97,7 +97,7 @@ diag_routed_rules() {
          | select(((.domain // []) | length) + ((.ip // []) | length) > 0)
          | select(.balancerTag != null
              or ((.outboundTag // "") as $t
-                 | ["direct", "block", "dns-out", "metrics-out"] | index($t) | not))]
+                 | ["direct", "block", "dns-out", "metrics-out", "resolver-out"] | index($t) | not))]
         | length' "$XKOP_CONFIG_PATH" 2> /dev/null
 }
 

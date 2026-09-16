@@ -69,10 +69,12 @@ check() {
 # сто процентов.
 idle='{"stats":{"inbound":{"tproxy-in":{"uplink":0,"downlink":0},"probe-in":{"uplink":0,"downlink":0}},
  "outbound":{"direct":{"uplink":0,"downlink":0},"block":{"uplink":0,"downlink":0},
+ "resolver-out":{"uplink":3000,"downlink":5000},
  "node-a":{"uplink":8000,"downlink":10000}}}}'
 out=$(dist "$idle" '{"up":0,"down":0}')
 check "пробы узлов — не туннель" "0" "$(printf '%s' "$out" | "$JQ" '.distribution.proxy.bytes')"
 check "без клиентов и всего ноль" "0" "$(printf '%s' "$out" | "$JQ" '.traffic.clients_total')"
+check "запросы резолвера движка — служебное, не напрямую" "0 8000" "$(printf '%s' "$out" | "$JQ" -r '"\(.distribution.direct.bytes) \(.distribution.service.bytes)"')"
 
 # Выборочный перехват: в движок вошло 1000 байт, из них 200 ушли напрямую
 # из движка; 5000 байт прошли мимо движка вовсе. Узел отправил больше
