@@ -52,6 +52,8 @@ extract() {
     extract "$UPDATE" update_router_arch u_router_arch
     extract "$UPDATE" update_asset_url u_asset_url
     extract "$UPDATE" update_engine_installed_version u_engine_version
+    extract "$INSTALL" engine_needs_room i_needs_room
+    extract "$UPDATE" update_engine_needs_room u_needs_room
 } > "$work/both.sh"
 
 # Окружение, от которого зависят обе стороны.
@@ -103,6 +105,16 @@ opkg() { printf 'busybox - 1.37.0\n'; }
 
 check "движка нет — пусто у обоих" "$(i_engine_version)" "$(u_engine_version)"
 check "и это действительно пусто" "" "$(i_engine_version)"
+
+# Место под новый движок рядом со старым. Решают оба одинаково, иначе
+# «xkop update» и установщик по-разному оставляли бы роутер на старом движке.
+room() { "$1" "$2" "$3" && echo yes || echo no; }
+for case_ in "22596 36834" "80000 36834" "40929 36834" "40931 36834" "abc 36834" " 36834" "50000 x"; do
+    set -- $case_
+    check "место под движок: свободно ${1:-пусто}, движок ${2:-пусто}"         "$(room i_needs_room "${1:-}" "${2:-}")" "$(room u_needs_room "${1:-}" "${2:-}")"
+done
+check "на стенде места не хватало" "yes" "$(room i_needs_room 22596 36834)"
+check "с запасом хватает" "no" "$(room i_needs_room 80000 36834)"
 
 echo "$((total - failed))/$total"
 

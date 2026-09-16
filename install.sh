@@ -271,6 +271,61 @@ pkg_world_restore() {
     note "список пакетов apk возвращён к прежнему: неудачная установка его засоряет"
 }
 
+# Хватит ли флэша, чтобы новый движок встал рядом со старым.
+#
+# apk распаковывает новый файл раньше, чем убирает старый, и тридцать с лишним
+# мегабайт движка нужны на флэше дважды. Сухой прогон этого не видит: он
+# проверяет зависимости, а не место. Проверено на стенде: «failed to extract
+# usr/bin/xray: No space left on device», и роутер оставался на старом движке
+# при «xkop установлен пакетом». Запас — четыре мегабайта на метаданные.
+engine_needs_room() {
+    free_kb="$1"
+    engine_kb="$2"
+    case "$free_kb" in '' | *[!0-9]*) return 1 ;; esac
+    case "$engine_kb" in '' | *[!0-9]*) return 1 ;; esac
+    [ "$free_kb" -lt $((engine_kb + 4096)) ]
+}
+
+# Прежний движок на время установки уходит в RAM, и место под новый появляется.
+#
+# Запущенный движок держит свой файл, и удалённый файл занимает флэш, пока жив
+# процесс, — поэтому служба на это время останавливается. Вернётся она там же,
+# где и после любого обновления. Памяти должно хватить с запасом: копия в /tmp
+# на роутере без памяти хуже, чем старый движок.
+ENGINE_STASH=""
+engine_make_room() {
+    [ -f /usr/bin/xray ] || return 0
+    engine_kb=$(( ($(wc -c < /usr/bin/xray) + 1023) / 1024 ))
+    engine_needs_room "$(overlay_free_kb)" "$engine_kb" || return 0
+
+    mem_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2> /dev/null)
+    case "$mem_kb" in '' | *[!0-9]*) mem_kb=0 ;; esac
+    if [ "$mem_kb" -lt $((engine_kb + 32768)) ]; then
+        warn "флэша под новый движок мало, а памяти не хватит подержать прежний"
+        return 0
+    fi
+
+    note "флэша под новый движок мало: прежний на время установки уходит в память"
+    ENGINE_STASH="/tmp/xkop-xray-room.$$"
+    if ! cp /usr/bin/xray "$ENGINE_STASH"; then
+        rm -f "$ENGINE_STASH"
+        ENGINE_STASH=""
+        return 0
+    fi
+    [ -x /etc/init.d/xkop ] && /etc/init.d/xkop stop > /dev/null 2>&1
+    rm -f /usr/bin/xray
+}
+
+engine_room_restore() {
+    [ -n "$ENGINE_STASH" ] || return 0
+    if [ "$1" != "1" ] && [ ! -e /usr/bin/xray ]; then
+        cp "$ENGINE_STASH" /usr/bin/xray && chmod 755 /usr/bin/xray
+        note "прежний движок возвращён на место"
+    fi
+    rm -f "$ENGINE_STASH"
+    ENGINE_STASH=""
+}
+
 pkg_install_file() {
     file="$1"
     [ -s "$file" ] || return 1
@@ -888,11 +943,14 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
                         cp /usr/bin/xray "$saved_engine" && rm -f /usr/bin/xray
                     fi
 
+                    engine_make_room
                     if pkg_install_file "$WORK/engine.$FORMAT"; then
                         note "движок установлен пакетом"
+                        engine_room_restore 1
                         rm -f "$saved_engine"
                     else
                         warn "движок пакетом не встал"
+                        engine_room_restore 0
                         if [ -n "$saved_engine" ] && [ -s "$saved_engine" ] \
                             && [ ! -e /usr/bin/xray ]; then
                             cp "$saved_engine" /usr/bin/xray

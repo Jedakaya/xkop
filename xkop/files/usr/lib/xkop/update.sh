@@ -151,6 +151,56 @@ update_would_fit() {
     return 1
 }
 
+# Хватит ли флэша, чтобы новый движок встал рядом со старым. То же правило,
+# что в install.sh (engine_needs_room), и проверка держит их согласованными:
+# apk распаковывает новый файл раньше, чем убирает старый, а сухой прогон
+# места не проверяет. На стенде это было «No space left on device».
+update_engine_needs_room() {
+    local free_kb="$1" engine_kb="$2"
+    case "$free_kb" in '' | *[!0-9]*) return 1 ;; esac
+    case "$engine_kb" in '' | *[!0-9]*) return 1 ;; esac
+    [ "$free_kb" -lt $((engine_kb + 4096)) ]
+}
+
+XKOP_ENGINE_STASH=""
+
+# Прежний движок уходит в RAM, служба останавливается — запущенный процесс
+# держит файл, и место не освободилось бы. Поднимает её update_healthy.
+update_engine_make_room() {
+    local engine_kb free_kb mem_kb
+    [ -f /usr/bin/xray ] || return 0
+    engine_kb=$(( ($(wc -c < /usr/bin/xray) + 1023) / 1024 ))
+    free_kb=$(df -k /overlay 2> /dev/null | awk 'NR==2 {print $4}')
+    update_engine_needs_room "$free_kb" "$engine_kb" || return 0
+
+    mem_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2> /dev/null)
+    case "$mem_kb" in '' | *[!0-9]*) mem_kb=0 ;; esac
+    if [ "$mem_kb" -lt $((engine_kb + 32768)) ]; then
+        log_warn "флэша под новый движок мало, а памяти не хватит подержать прежний"
+        return 0
+    fi
+
+    log_info "флэша под новый движок мало: прежний на время установки в памяти"
+    XKOP_ENGINE_STASH="/tmp/xkop-xray-room.$$"
+    if ! cp /usr/bin/xray "$XKOP_ENGINE_STASH"; then
+        rm -f "$XKOP_ENGINE_STASH"
+        XKOP_ENGINE_STASH=""
+        return 0
+    fi
+    /etc/init.d/xkop stop > /dev/null 2>&1
+    rm -f /usr/bin/xray
+}
+
+update_engine_room_restore() {
+    [ -n "$XKOP_ENGINE_STASH" ] || return 0
+    if [ "$1" != "1" ] && [ ! -e /usr/bin/xray ]; then
+        cp "$XKOP_ENGINE_STASH" /usr/bin/xray && chmod 755 /usr/bin/xray
+        log_info "прежний движок возвращён на место"
+    fi
+    rm -f "$XKOP_ENGINE_STASH"
+    XKOP_ENGINE_STASH=""
+}
+
 update_install_file() {
     local file="$1"
 
@@ -344,9 +394,12 @@ update_apply() {
     update_stage_rollback
 
     if [ -s "$work/engine.$format" ]; then
+        update_engine_make_room
         if update_install_file "$work/engine.$format"; then
             engine_updated=1
+            update_engine_room_restore 1
         else
+            update_engine_room_restore 0
             log_warn "движок не обновился, продолжаю с прежним"
         fi
     fi
