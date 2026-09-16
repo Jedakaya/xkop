@@ -50,11 +50,21 @@ access_trim() {
 
 # Lines about one name, newest last. Matching on ":<name>:" keeps
 # "notexample.com" out of the answer for "example.com".
+#
+# The probe connects by address, the way a client does, so its own line carries
+# the address rather than the name. Addresses, when given, pick up probe lines
+# only: a client line for a shared CDN address would be about some other name.
+# Lines start with the timestamp, so sorting keeps them in order.
 access_lines_for() {
-    local domain="$1" file
+    local domain="$1" addresses="${2:-}" file address
     file=$(access_log_path)
     [ -f "$file" ] || return 0
-    grep -F ":$domain:" "$file" 2> /dev/null
+    {
+        grep -F ":$domain:" "$file" 2> /dev/null
+        for address in $addresses; do
+            grep -F "[probe-in " "$file" 2> /dev/null | grep -F "tcp:$address:"
+        done
+    } | sort
 }
 
 # The separator in the log is not decoration. Read from the engine's own
@@ -87,8 +97,12 @@ explain_probe() {
     port="${XKOP_PROBE_PORT:-10809}"
     command -v curl > /dev/null 2>&1 || return 1
 
+    # --socks5, not --socks5-hostname: the name is resolved here, the way a
+    # client resolves it, and reaches the engine as an address plus SNI. With
+    # routing on AsIs a probe carrying only the name would skip every subnet
+    # rule and report "direct" for traffic that clients actually tunnel.
     curl -s --max-time 6 -o /dev/null \
-        --socks5-hostname "127.0.0.1:$port" "https://$domain/" 2> /dev/null
+        --socks5 "127.0.0.1:$port" "https://$domain/" 2> /dev/null
     return 0
 }
 
@@ -168,7 +182,7 @@ explain_addresses() {
 }
 
 explain_domain() {
-    local domain="$1" observed line outbound reason rules requests probed=0
+    local domain="$1" observed line outbound reason rules requests probed=0 addresses
 
     if [ -z "$domain" ]; then
         jq -nc '{ok: false, error: "no_domain"}'
@@ -190,7 +204,9 @@ explain_domain() {
         sleep 1
     fi
 
-    observed=$(access_lines_for "$domain")
+    addresses=$(explain_addresses "$domain")
+    observed=$(access_lines_for "$domain" \
+        "$(printf '%s' "$addresses" | jq -r '.[]?.address' 2> /dev/null)")
     line=$(printf '%s' "$observed" | tail -n 1)
     outbound=$(access_line_outbound "$line")
     reason=$(access_line_reason "$line")
@@ -210,7 +226,7 @@ explain_domain() {
         --argjson probed "$probed" \
         --argjson rules "${rules:-null}" \
         --argjson pool "$(subscription_pool_all)" \
-        --argjson addresses "$(explain_addresses "$domain")" \
+        --argjson addresses "${addresses:-null}" \
         --argjson requests "$requests" \
         '
         ($pool | map(select(.tag == $outbound)) | first) as $node

@@ -61,6 +61,16 @@ check "строки про имя отобраны" "2" \
 printf '%s\n' '2026/08/20 18:13:00.1 from tcp:1.2.3.4:1 accepted tcp:notexample.com:443 [tproxy-in -> direct]' >> "$XKOP_ACCESS_LOG"
 check "чужое имя не попало" "2" "$(access_lines_for example.com | grep -c .)"
 
+# Проба идёт по адресу, как клиент, и в её строке стоит адрес. Строка клиента
+# с тем же адресом — про другое имя на общем CDN, её брать нельзя.
+printf '%s\n%s\n' \
+    '2026/08/20 18:14:00.1 from tcp:192.168.1.50:5 accepted tcp:77.88.55.242:443 [tproxy-in >> direct]' \
+    '2026/08/20 18:14:01.1 from tcp:127.0.0.1:6 accepted tcp:77.88.55.242:443 [probe-in -> 🇫🇮 Финляндия]' >> "$XKOP_ACCESS_LOG"
+check "строка пробы найдена по адресу" "🇫🇮 Финляндия" \
+    "$(access_line_outbound "$(access_lines_for ya.ru "77.88.55.242 5.255.255.242" | tail -n 1)")"
+check "строка клиента по тому же адресу не взята" "1" \
+    "$(access_lines_for ya.ru "77.88.55.242" | grep -c .)"
+
 check "сводка считает по именам" "2" \
     "$(explain_recent 10 | jq -r '.domains[] | select(.domain == "example.com") | .requests')"
 check "в сводке полное имя узла" "🇩🇪 Германия(если нет ограничений)" \

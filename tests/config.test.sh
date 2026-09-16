@@ -52,7 +52,7 @@ done
 
 q() { "$JQ" -c "$2" "$work/$1"; }
 
-check "служебные исходящие на месте" '["direct","block"]' \
+check "служебные исходящие на месте" '["direct","block","resolver-out"]' \
     "$(q with-pool.json '[.outbounds[] | select(.protocol == "freedom" or .protocol == "blackhole") | .tag]')"
 check "узлы скопированы в исходящие" '["NL-Amsterdam-2","DE-Frankfurt-1"]' \
     "$(q with-pool.json '[.outbounds[] | select(.protocol == "vless" or .protocol == "hysteria") | .tag]')"
@@ -72,7 +72,7 @@ check "интервал проверки строкой, а не числом" '
     "$(q with-pool.json '.burstObservatory.pingConfig.interval')"
 
 check "первое правило оставляет локальное дома" '"direct"' \
-    "$(q with-pool.json '.routing.rules[0].outboundTag')"
+    "$(q with-pool.json '[.routing.rules[] | select(.inboundTag != ["dns-internal"])][0].outboundTag')"
 check "geoip.dat не требуется" "true" \
     "$(q with-pool.json '[.routing.rules[].ip? // [] | .[]] | all(startswith("geoip:") | not)')"
 check "профиль ушёл в балансировщик" '"pool"' \
@@ -120,7 +120,7 @@ check "серверы узлов не подделываются" 'true' "$(q fa
 check "резолвер-адрес в исключения не попадает" 'false' "$(q fakeip.json '[.dns.servers[] | .domains[]?] | any(. == "domain:8.8.8.8")')"
 check "выученная заглушка ушла в отбраковку" '["46.191.166.9"]' "$(q fakeip.json '[.dns.servers[] | select(.unexpectedIPs != null)] | first | .unexpectedIPs')"
 check "параллельный опрос при нескольких серверах" "true"     "$(q fakeip.json '.dns.enableParallelQuery')"
-check "запросы с DNS-слушателя уходят резолверу" '"dns-out"'     "$(q fakeip.json '.routing.rules[0].outboundTag')"
+check "запросы с DNS-слушателя уходят резолверу" '"dns-out"'     "$(q fakeip.json '[.routing.rules[] | select(.inboundTag != ["dns-internal"])][0].outboundTag')"
 check "пул поддельных адресов задан" '"198.18.0.0/15"'     "$(q fakeip.json '.fakedns.ipPool')"
 
 # Защита от обхода: клиент со своим резолвером мимо нас не ходит незаметно.
@@ -166,6 +166,27 @@ check "интерфейс наружу проставлен прямому ис�
 
 dns_case '{"dns_extra": []}'
 check "без настройки интерфейс не навязан" 'null' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.interface // null')"
+
+# Устаревший ответ сразу, свежий в фоне; предел обязателен — при нуле кэш
+# движка не чистится вовсе.
+check "DNS отдаёт устаревшее сразу" 'true' "$(q dns-case.json '.dns.serveStale')"
+check "и не дольше часа после истечения" '3600' "$(q dns-case.json '.dns.serveExpiredTTL')"
+dns_case '{"dns_cache": "0", "dns_extra": []}'
+check "без кэша устаревшего нет" 'false' "$(q dns-case.json '.dns.serveStale')"
+dns_case '{"dns_extra": []}'
+
+# Резолвер движка — своим исходящим и первым правилом. Иначе защита от DoH
+# (8.8.8.8:443 в блок) глушила собственный DNS, а счётчик direct смешивал
+# запросы резолвера с трафиком клиентов.
+check "у DNS движка своя метка" '"dns-internal"' "$(q dns-case.json '.dns.tag')"
+check "её правило первое" '"resolver-out"' "$(q dns-case.json '.routing.rules[0] | select(.inboundTag == ["dns-internal"]) | .outboundTag')"
+check "исходящий резолвера есть и помечен" '4194304' "$(q dns-case.json '.outbounds[] | select(.tag == "resolver-out") | .streamSettings.sockopt.mark')"
+dns_case '{"block_client_doh": "1", "dns_extra": []}'
+check "защита от DoH стоит после правила резолвера" 'true' "$(q dns-case.json '(.routing.rules | map(.inboundTag == ["dns-internal"]) | index(true)) < (.routing.rules | map(.port? == 443) | index(true))')"
+dns_case '{"dns_extra": []}'
+
+# Пропавший интернет у роутера не должен хоронить узлы.
+check "наблюдатель проверяет связь мимо узлов" '"https://ya.ru/"' "$(q dns-case.json '.burstObservatory.pingConfig.connectivity')"
 
 # freedom.domainStrategy движок 26.9.9 объявил устаревшим и обещает удалить.
 check "стратегия прямого исходящего в sockopt" '"UseIP"' "$(q dns-case.json '.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.domainStrategy')"

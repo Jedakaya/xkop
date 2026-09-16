@@ -22,7 +22,8 @@ def service_tags: {
     direct: "direct",
     block: "block",
     dns: "dns-out",
-    metrics: "metrics-out"
+    metrics: "metrics-out",
+    resolver: "resolver-out"
 };
 
 def settings: .settings;
@@ -68,7 +69,16 @@ def probe_inbound:
         listen: "127.0.0.1",
         port: (settings.probe_port // 10809),
         settings: {udp: false},
-        sniffing: {enabled: true, destOverride: ["http", "tls"], routeOnly: true}
+        # fakedns - как у клиентского входа. Проба идёт по адресу, как клиент,
+        # и в режиме поддельных адресов это адрес из пула: без этого
+        # распознавателя имя по нему не восстанавливалось, и разбор отвечал
+        # «напрямую» для того, что клиенты гонят в туннель. Проверено на стенде.
+        sniffing: {
+            enabled: true,
+            destOverride: (["http", "tls"]
+                + (if (settings.dns_mode // "off") == "fakeip" then ["fakedns"] else [] end)),
+            routeOnly: true
+        }
     };
 
 # Counters are what the dashboard is built on. Without the stats object the
@@ -392,6 +402,18 @@ def dns_section:
         # у sing-box, в Xray нет вовсе - есть только это.
         disableCache: ((settings.dns_cache // "1") == "0"),
 
+        # Устаревший ответ отдаётся сразу, свежий запрашивается в фоне.
+        #
+        # Без этого каждое имя с истёкшим TTL - а у популярных сайтов это
+        # минуты - ждёт полный запрос DoH, и повторный заход на тот же сайт
+        # «думает» так же, как первый. Клиент получает TTL в одну секунду,
+        # следующий его запрос уже видит обновлённый адрес.
+        #
+        # Предел в час обязателен: при нуле движок не чистит кэш вовсе
+        # (app/dns/cache_controller.go), и память растёт с каждым именем.
+        serveStale: ((settings.dns_cache // "1") != "0"),
+        serveExpiredTTL: ((settings.dns_stale_seconds // "3600") | tonumber? // 3600),
+
         # Подсказка о том, откуда спрашивают.
         #
         # Без неё резолвер решает по собственному расположению, а не по нашему,
@@ -403,6 +425,8 @@ def dns_section:
             if (settings.dns_client_ip // "") == "" then null
             else settings.dns_client_ip end
         ),
+        # Метка, по которой запросы резолвера узнаются в маршрутизации.
+        tag: "dns-internal",
         servers: dns_servers
     } | with_entries(select(.value != null));
 
@@ -452,7 +476,14 @@ def service_outbounds:
         {tag: service_tags.direct, protocol: "freedom",
          streamSettings: {sockopt: ({domainStrategy: direct_domain_strategy}
                                     + (output_sockopt.sockopt // {}))}},
-        {tag: service_tags.block, protocol: "blackhole"}
+        {tag: service_tags.block, protocol: "blackhole"},
+        # Запросы собственного резолвера движка. Отдельно от direct по двум
+        # причинам. Защита от клиентских DoH (8.8.8.8:443 в блок) ловила
+        # и наш DoH к тому же адресу - DNS умирал целиком. А счётчик direct
+        # смешивал их с трафиком клиентов, и распределение на роутере без
+        # клиентов показывало сто процентов «напрямую».
+        ({tag: service_tags.resolver, protocol: "freedom",
+          streamSettings: {sockopt: ({domainStrategy: "AsIs"} + (output_sockopt.sockopt // {}))}})
     ]
     + (if fakeip_enabled then [ {tag: service_tags.dns, protocol: "dns"} ] else [] end);
 
@@ -520,6 +551,17 @@ def observatory_section:
             subjectSelector: $tags,
             pingConfig: {
                 destination: (settings.probe_url // "https://connectivitycheck.gstatic.com/generate_204"),
+                # Проверка связи мимо узлов. Проба, провалившаяся вместе с ней,
+                # не записывается: пропал интернет у самого роутера, а не узлы.
+                #
+                # Без неё минута без WAN помечала мёртвыми все узлы разом,
+                # балансировщик уводил туннельный трафик напрямую, а цикл
+                # наблюдателя - interval, умноженный на sampling, девять минут
+                # с пробами вразброс - возвращал узлы не сразу. Помогал только
+                # перезапуск: он делает первичную проверку немедленно.
+                # Проверено по app/observatory/burst/healthping.go: годится
+                # любой ответ HTTP, прямой запрос идёт только после провала.
+                connectivity: (settings.probe_connectivity // "https://ya.ru/"),
                 interval: (settings.probe_interval // "3m"),
                 timeout: "5s",
                 sampling: 3
@@ -594,9 +636,19 @@ def protection_rules:
 def routing_section:
     (node_tags | length > 0) as $has_pool
     | {
-        domainStrategy: "IPIfNonMatch",
+        # AsIs, а не IPIfNonMatch. Второй на каждом соединении, не попавшем
+        # под доменное правило - а при сплошном перехвате это любой прямой
+        # сайт, - резолвит имя и только потом соединяется (app/router/router.go).
+        # Адрес назначения tproxy уже принёс, правила по подсетям сверяются
+        # с ним на первом же проходе, и с настоящим адресом, а не с ответом
+        # нашего DNS. Замер на стенде, 25 сайтов напрямую, холодный кэш, три
+        # круга: первый байт в среднем 216 мс против 233.
+        domainStrategy: "AsIs",
         rules: (
-            (if fakeip_enabled then
+            # Первым: запрос резолвера движка не должен попасть ни под защиту,
+            # ни под правила профилей.
+            [ {type: "field", inboundTag: ["dns-internal"], outboundTag: service_tags.resolver} ]
+            + (if fakeip_enabled then
                 # Everything arriving at the DNS listener is answered by the
                 # engine's own resolver. First rule, because a query must never
                 # fall through to the routing below and leave as traffic.
