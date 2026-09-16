@@ -655,6 +655,25 @@ panel_configure_uhttpd() {
     [ -f /etc/init.d/uhttpd ] || return 1
     [ -s "$XKOP_PANEL_ROOT/index.html" ] || return 1
 
+    # Установщик прежних версий заводил ту же панель секцией «xkop». Две секции
+    # на одном порту — и procd без конца перезапускает вторую: «Address in use»
+    # в журнале каждые пять секунд.
+    local legacy=0
+    if [ "$(uci -q get uhttpd.xkop.home 2> /dev/null)" = "$XKOP_PANEL_ROOT" ]; then
+        uci -q delete uhttpd.xkop
+        legacy=1
+    fi
+
+    # Уже настроено — не трогать. Перезапуск uhttpd на каждом старте службы
+    # обрывал запросы LuCI на середине ответа: окно «Роутер не ответил:
+    # not_reachable» при перезапуске xkop из интерфейса. Проверено запросом
+    # через /ubus во время перезапуска.
+    if [ "$legacy" -eq 0 ] \
+        && [ "$(uci -q get "uhttpd.$XKOP_PANEL_SECTION.home" 2> /dev/null)" = "$XKOP_PANEL_ROOT" ] \
+        && [ "$(uci -q get "uhttpd.$XKOP_PANEL_SECTION.listen_http" 2> /dev/null)" = "0.0.0.0:$XKOP_PANEL_PORT" ]; then
+        return 0
+    fi
+
     uci -q delete "uhttpd.$XKOP_PANEL_SECTION"
     uci -q set "uhttpd.$XKOP_PANEL_SECTION=uhttpd"
     uci -q add_list "uhttpd.$XKOP_PANEL_SECTION.listen_http=0.0.0.0:$XKOP_PANEL_PORT"
@@ -665,7 +684,9 @@ panel_configure_uhttpd() {
     uci -q set "uhttpd.$XKOP_PANEL_SECTION.network_timeout=30"
     uci -q commit uhttpd
 
-    /etc/init.d/uhttpd restart > /dev/null 2>&1
+    # reload, а не restart: procd переподнимает только изменившиеся
+    # экземпляры, и LuCI на порту 80 остаётся тем же процессом.
+    /etc/init.d/uhttpd reload > /dev/null 2>&1
     log_info "панель клиента отдаётся на порту $XKOP_PANEL_PORT"
 }
 
@@ -673,7 +694,7 @@ panel_remove_uhttpd() {
     uci -q get "uhttpd.$XKOP_PANEL_SECTION" > /dev/null 2>&1 || return 0
     uci -q delete "uhttpd.$XKOP_PANEL_SECTION"
     uci -q commit uhttpd
-    /etc/init.d/uhttpd restart > /dev/null 2>&1
+    /etc/init.d/uhttpd reload > /dev/null 2>&1
 }
 
 panel_present() {

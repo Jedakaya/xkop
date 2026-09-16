@@ -11,14 +11,44 @@
 # A router left with someone else's idea of "the default DNS" is a router whose
 # owner has to work out what it used to be.
 
+XKOP_DNSMASQ_INIT=${XKOP_DNSMASQ_INIT:-/etc/init.d/dnsmasq}
+
+# Значение, которого не было. Пустое сохранить нельзя — uci его не хранит,
+# а отсутствие резервной копии неотличимо от «копию не делали».
+XKOP_DNSMASQ_UNSET='-'
+
+# Переключён ли dnsmasq нами.
+#
+# Признаком был сохранённый список прежних серверов. На чистом роутере
+# серверов нет, сохранять нечего — и признака не было тоже. Остановка
+# считала, что dnsmasq не трогали, и оставляла клиентов без имён, а каждый
+# запуск переключал заново и записывал в «прежние» значения свои же
+# noresolv=1 и cachesize=0. Проверено на чистой OpenWrt 25.12.
 dnsmasq_configured() {
-    uci -q get "dhcp.@dnsmasq[0].xkop_server" > /dev/null 2>&1
+    [ "$(uci -q get "dhcp.@dnsmasq[0].xkop_managed" 2> /dev/null)" = "1" ] && return 0
+    uci -q get "dhcp.@dnsmasq[0].xkop_server" > /dev/null 2>&1 && return 0
+    # Роутер, переключённый до появления признака.
+    uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null | tr ' ' '\n' \
+        | grep -qxF "$XKOP_DNS_INBOUND_ADDRESS"
 }
 
 dnsmasq_backup_option() {
     local key="$1" backup="$2" value
     value=$(uci -q get "dhcp.@dnsmasq[0].$key" 2> /dev/null)
-    [ -n "$value" ] && uci -q set "dhcp.@dnsmasq[0].$backup=$value"
+    uci -q set "dhcp.@dnsmasq[0].$backup=${value:-$XKOP_DNSMASQ_UNSET}"
+}
+
+# Вернуть сохранённое значение. Копии, которой нельзя верить, — только снять
+# своё: dnsmasq без noresolv и с кэшем по умолчанию резолвит всегда.
+dnsmasq_restore_option() {
+    local key="$1" backup="$2" trusted="$3" value
+    value=$(uci -q get "dhcp.@dnsmasq[0].$backup" 2> /dev/null)
+    if [ "$trusted" = "1" ] && [ -n "$value" ] && [ "$value" != "$XKOP_DNSMASQ_UNSET" ]; then
+        uci -q set "dhcp.@dnsmasq[0].$key=$value"
+    else
+        uci -q delete "dhcp.@dnsmasq[0].$key"
+    fi
+    uci -q delete "dhcp.@dnsmasq[0].$backup"
 }
 
 dnsmasq_configure() {
@@ -30,7 +60,7 @@ dnsmasq_configure() {
     fi
 
     command -v uci > /dev/null 2>&1 || return 1
-    [ -f /etc/init.d/dnsmasq ] || return 1
+    [ -f "$XKOP_DNSMASQ_INIT" ] || return 1
 
     if dnsmasq_configured; then
         return 0
@@ -41,6 +71,9 @@ dnsmasq_configure() {
     current=$(uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null)
     for server in $current; do
         [ "$server" = "$XKOP_DNS_INBOUND_ADDRESS" ] && continue
+        # Заглушка для Firefox — наша, её снимает dnsmasq_protection_clear.
+        # Сохранённая как «прежняя», она возвращалась после остановки.
+        [ "$server" = "/use-application-dns.net/" ] && continue
         uci -q add_list "dhcp.@dnsmasq[0].xkop_server=$server"
     done
 
@@ -54,9 +87,10 @@ dnsmasq_configure() {
     # A second cache in front of it would hand out addresses the engine no
     # longer knows anything about.
     uci -q set "dhcp.@dnsmasq[0].cachesize=0"
+    uci -q set "dhcp.@dnsmasq[0].xkop_managed=1"
     uci -q commit dhcp
 
-    /etc/init.d/dnsmasq restart > /dev/null 2>&1
+    "$XKOP_DNSMASQ_INIT" restart > /dev/null 2>&1
     log_info "dnsmasq переключён на $XKOP_DNS_INBOUND_ADDRESS"
 }
 
@@ -92,13 +126,16 @@ dnsmasq_protection() {
     # Firefox asks this name before turning its own DoH on. An empty answer
     # from us is the documented way to say "not here".
     if [ "$canary" = "1" ]; then
-        uci -q add_list "dhcp.@dnsmasq[0].server=/use-application-dns.net/"
+        # Список, а не значение: без проверки каждый запуск добавлял копию.
+        uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null | tr ' ' '\n' \
+            | grep -qxF "/use-application-dns.net/" \
+            || uci -q add_list "dhcp.@dnsmasq[0].server=/use-application-dns.net/"
         changed=1
     fi
 
     if [ "$changed" -eq 1 ]; then
         uci -q commit dhcp
-        /etc/init.d/dnsmasq restart > /dev/null 2>&1
+        "$XKOP_DNSMASQ_INIT" restart > /dev/null 2>&1
         log_info "фильтры записей DNS применены"
     fi
 }
@@ -121,40 +158,38 @@ dnsmasq_protection_clear() {
 
     if [ "$changed" -eq 1 ]; then
         uci -q commit dhcp
-        /etc/init.d/dnsmasq restart > /dev/null 2>&1
+        "$XKOP_DNSMASQ_INIT" restart > /dev/null 2>&1
         log_info "фильтры записей DNS сняты"
     fi
 }
 
 dnsmasq_restore() {
-    local value
+    local value trusted=1
 
     dnsmasq_configured || return 0
 
+    # Без признака копии noresolv и cachesize могли быть переписаны нашими же
+    # значениями при повторном запуске. Верить им можно, только если прежние
+    # серверы были: тогда признаком служили они, и повторного переключения
+    # не случалось.
+    if [ "$(uci -q get "dhcp.@dnsmasq[0].xkop_managed" 2> /dev/null)" != "1" ] \
+        && ! uci -q get "dhcp.@dnsmasq[0].xkop_server" > /dev/null 2>&1; then
+        trusted=0
+    fi
+
     uci -q delete "dhcp.@dnsmasq[0].server"
     for value in $(uci -q get "dhcp.@dnsmasq[0].xkop_server" 2> /dev/null); do
+        [ "$value" = "$XKOP_DNS_INBOUND_ADDRESS" ] && continue
         uci -q add_list "dhcp.@dnsmasq[0].server=$value"
     done
     uci -q delete "dhcp.@dnsmasq[0].xkop_server"
     uci -q delete "dhcp.@dnsmasq[0].filter_rr" 2> /dev/null
 
-    value=$(uci -q get "dhcp.@dnsmasq[0].xkop_noresolv" 2> /dev/null)
-    if [ -n "$value" ]; then
-        uci -q set "dhcp.@dnsmasq[0].noresolv=$value"
-        uci -q delete "dhcp.@dnsmasq[0].xkop_noresolv"
-    else
-        uci -q delete "dhcp.@dnsmasq[0].noresolv"
-    fi
-
-    value=$(uci -q get "dhcp.@dnsmasq[0].xkop_cachesize" 2> /dev/null)
-    if [ -n "$value" ]; then
-        uci -q set "dhcp.@dnsmasq[0].cachesize=$value"
-        uci -q delete "dhcp.@dnsmasq[0].xkop_cachesize"
-    else
-        uci -q delete "dhcp.@dnsmasq[0].cachesize"
-    fi
+    dnsmasq_restore_option noresolv xkop_noresolv "$trusted"
+    dnsmasq_restore_option cachesize xkop_cachesize "$trusted"
+    uci -q delete "dhcp.@dnsmasq[0].xkop_managed"
 
     uci -q commit dhcp
-    /etc/init.d/dnsmasq restart > /dev/null 2>&1
+    "$XKOP_DNSMASQ_INIT" restart > /dev/null 2>&1
     log_info "dnsmasq возвращён в прежнее состояние"
 }

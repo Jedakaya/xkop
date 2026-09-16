@@ -25,16 +25,19 @@
 #   XKOP_REPO=Jedakaya/xkop    XKOP_REF=main
 #   XKOP_FROM_BRANCH=1         не смотреть релизы, ставить с ветки
 #   XKOP_NO_ENGINE=1           не трогать движок
+#   XKOP_PANEL=1               поставить панель клиента на порту 8090
+#                              (уже стоящая обновляется и без этого)
 #   GITHUB_TOKEN=...           если репозиторий закрыт
 
 set -u
 
 XKOP_REPO=${XKOP_REPO:-Jedakaya/xkop}
 XKOP_REF=${XKOP_REF:-main}
+XKOP_PANEL=${XKOP_PANEL:-0}
 XKOP_LIB_DIR=/usr/lib/xkop
 PANEL_ROOT=/www-xkop
 PANEL_PORT=8090
-PANEL_UHTTPD_SECTION=xkop
+PANEL_UHTTPD_SECTION=xkop_panel
 WORK=/tmp/xkop-install
 
 say() { echo; echo "== $*"; }
@@ -422,6 +425,9 @@ panel_address() {
 }
 
 configure_panel_uhttpd() {
+    # Прежнее имя секции. Две секции на одном порту — и procd без конца
+    # перезапускает вторую.
+    [ "$(uci -q get uhttpd.xkop.home)" = "$PANEL_ROOT" ] && uci -q delete uhttpd.xkop
     uci -q delete uhttpd."$PANEL_UHTTPD_SECTION"
     uci set uhttpd."$PANEL_UHTTPD_SECTION"=uhttpd
     uci add_list uhttpd."$PANEL_UHTTPD_SECTION".listen_http="0.0.0.0:$PANEL_PORT"
@@ -432,7 +438,8 @@ configure_panel_uhttpd() {
     uci set uhttpd."$PANEL_UHTTPD_SECTION".network_timeout="30"
     uci commit uhttpd
 
-    /etc/init.d/uhttpd restart > /dev/null 2>&1
+    # reload переподнимает только изменившийся экземпляр, LuCI не трогается.
+    /etc/init.d/uhttpd reload > /dev/null 2>&1
 }
 
 PANEL_CGI_FILES="_common auth status subscription-set subscription-update routes route-set node-select explain"
@@ -484,7 +491,7 @@ install_client_panel() {
     answered=0
     for attempt in 1 2 3 4 5; do
         if command -v curl > /dev/null 2>&1 \
-            && curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PANEL_PORT/"; then
+            && curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PANEL_PORT/" 2> /dev/null; then
             answered=1
             break
         fi
@@ -1081,8 +1088,14 @@ fi
 
 # Панель — обычные файлы, а не пакет: её отдаёт отдельный экземпляр uhttpd,
 # и обновляется она вместе со скриптами.
-say "панель клиента"
-install_client_panel || true
+#
+# Ставится по желанию: владельцу роутера она не нужна, у него LuCI, а лишний
+# экземпляр uhttpd — это память и открытый порт. Уже стоящая обновляется,
+# чтобы не остаться старой рядом с новым xkop.
+if [ "$XKOP_PANEL" = "1" ] || [ -s "$PANEL_ROOT/index.html" ]; then
+    say "панель клиента"
+    install_client_panel || true
+fi
 
 rm -rf "$WORK"
 
@@ -1107,9 +1120,11 @@ echo "  /etc/init.d/xkop enable && /etc/init.d/xkop start"
 echo
 echo "  xkop get_status"
 echo
-echo "Панель клиента:"
-panel_address | while read -r url; do echo "  $url"; done
-echo "  вход — пароль root от роутера"
-echo
+if [ -s "$PANEL_ROOT/index.html" ]; then
+    echo "Панель клиента:"
+    panel_address | while read -r url; do echo "  $url"; done
+    echo "  вход — пароль root от роутера"
+    echo
+fi
 echo "Настройки целиком: LuCI, «Сервисы → xkop»"
 echo "Обновление:        xkop update"

@@ -76,11 +76,10 @@ XKOP_RUN_DIR="$work/run"
 # shellcheck source=/dev/null
 . "$LIB/dnsmasq.sh"
 
-# Настоящего /etc/init.d/dnsmasq в проверке нет, поэтому проверка его наличия
-# переопределяется на успешную.
-test -f /etc/init.d/dnsmasq || {
-    dnsmasq_configure_orig() { :; }
-}
+# Перезапуск dnsmasq в проверке — заглушка, но функции настоящие. Прежде
+# здесь стояла копия dnsmasq_configure, и проверялась копия: ошибка
+# с признаком «переключён» в настоящей функции прошла мимо.
+XKOP_DNSMASQ_INIT="$work/etc/init.d/dnsmasq"
 
 failed=0
 total=0
@@ -112,23 +111,6 @@ dhcp.@dnsmasq[0].cachesize=150
 xkop.settings=settings
 EOF
 
-# Подменяем проверку наличия init-скрипта: в проверке его нет.
-dnsmasq_configure() {
-    local current server
-    current=$(uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null)
-    for server in $current; do
-        [ "$server" = "$XKOP_DNS_INBOUND_ADDRESS" ] && continue
-        uci -q add_list "dhcp.@dnsmasq[0].xkop_server=$server"
-    done
-    dnsmasq_backup_option noresolv xkop_noresolv
-    dnsmasq_backup_option cachesize xkop_cachesize
-    uci -q delete "dhcp.@dnsmasq[0].server"
-    uci -q add_list "dhcp.@dnsmasq[0].server=$XKOP_DNS_INBOUND_ADDRESS"
-    uci -q set "dhcp.@dnsmasq[0].noresolv=1"
-    uci -q set "dhcp.@dnsmasq[0].cachesize=0"
-    uci -q commit dhcp
-}
-
 dnsmasq_configure
 
 check "резолвер переключён на движок" "127.0.0.43" "$(value_of 'dhcp.@dnsmasq[0].server')"
@@ -142,6 +124,7 @@ check "резолверы вернулись как были" "192.168.1.1 1.1.1
 check "кэш вернулся как был" "150" "$(value_of 'dhcp.@dnsmasq[0].cachesize')"
 check "наши ключи убраны" "" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
 check "noresolv не оставлен включённым" "" "$(value_of 'dhcp.@dnsmasq[0].noresolv')"
+check "признак снят" "" "$(value_of 'dhcp.@dnsmasq[0].xkop_managed')"
 
 # Фильтры записей включаются отдельно и снимаются отдельно: они могут стоять
 # при выключенном режиме DNS, и тогда цеплять их не за что.
@@ -152,6 +135,61 @@ check "фильтры записей выставлены" "HTTPS PTR" "$(value_
 dnsmasq_protection_clear
 check "фильтры сняты без правки резолвера" "" "$(value_of 'dhcp.@dnsmasq[0].filter_rr')"
 check "резолверы при этом не тронуты" "192.168.1.1 1.1.1.1" "$(value_of 'dhcp.@dnsmasq[0].server')"
+
+# --- чистый роутер: прежних серверов нет -----------------------------------
+
+# Так выглядит dnsmasq сразу после установки OpenWrt. Признаком переключения
+# был список прежних серверов, а сохранять было нечего: остановка оставляла
+# клиентов без имён, повторный запуск затирал прежние значения своими.
+cat > "$XKOP_TEST_UCI" << 'EOF2'
+dhcp.@dnsmasq[0].cachesize=1000
+xkop.settings=settings
+EOF2
+
+dnsmasq_configure
+check "чистый: переключён" "127.0.0.43" "$(value_of 'dhcp.@dnsmasq[0].server')"
+check "чистый: переключение замечено" "yes" "$(dnsmasq_configured && echo yes || echo no)"
+
+dnsmasq_configure
+check "чистый: повторный запуск не затёр прежний кэш" "1000" "$(value_of 'dhcp.@dnsmasq[0].xkop_cachesize')"
+check "чистый: прежнее отсутствие noresolv запомнено" "-" "$(value_of 'dhcp.@dnsmasq[0].xkop_noresolv')"
+
+dnsmasq_restore
+check "чистый: сервер движка снят" "" "$(value_of 'dhcp.@dnsmasq[0].server')"
+check "чистый: noresolv снят" "" "$(value_of 'dhcp.@dnsmasq[0].noresolv')"
+check "чистый: кэш вернулся" "1000" "$(value_of 'dhcp.@dnsmasq[0].cachesize')"
+check "чистый: резервных ключей не осталось" ""     "$(grep -c 'xkop_' "$XKOP_TEST_UCI" | sed 's/^0$//')"
+
+# --- роутер, испорченный прежней версией -----------------------------------
+
+# Признака нет, прежних серверов нет, а в копиях — наши же значения.
+# Верить им нельзя: вернуть noresolv=1 без серверов значит оставить сеть
+# без имён навсегда.
+cat > "$XKOP_TEST_UCI" << 'EOF2'
+dhcp.@dnsmasq[0].server=127.0.0.43
+dhcp.@dnsmasq[0].noresolv=1
+dhcp.@dnsmasq[0].xkop_noresolv=1
+dhcp.@dnsmasq[0].cachesize=0
+dhcp.@dnsmasq[0].xkop_cachesize=0
+xkop.settings=settings
+EOF2
+
+check "испорченный: переключение замечено" "yes" "$(dnsmasq_configured && echo yes || echo no)"
+dnsmasq_restore
+check "испорченный: сервер движка снят" "" "$(value_of 'dhcp.@dnsmasq[0].server')"
+check "испорченный: noresolv снят" "" "$(value_of 'dhcp.@dnsmasq[0].noresolv')"
+check "испорченный: кэш не оставлен нулём" "" "$(value_of 'dhcp.@dnsmasq[0].cachesize')"
+
+# --- заглушка Firefox не становится «прежним» сервером -------------------
+
+cat > "$XKOP_TEST_UCI" << 'EOF2'
+dhcp.@dnsmasq[0].server=/use-application-dns.net/
+xkop.settings=settings
+EOF2
+dnsmasq_configure
+check "заглушка не сохранена как прежняя" "" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
+dnsmasq_restore
+check "после возврата заглушки нет" "" "$(value_of 'dhcp.@dnsmasq[0].server')"
 
 echo "$((total - failed))/$total"
 
