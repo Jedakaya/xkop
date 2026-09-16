@@ -104,6 +104,9 @@ const CSS = `
 .xkop-explain-out { margin-top: .5em; }
 .xkop-controls { margin-top: auto; padding-top: .8em; display: flex;
   gap: .5em; flex-wrap: wrap; }
+/* Темы LuCI дают кнопке отступ слева от соседней. В строке с переносом
+   он доставался только перенесённым, и кнопки стояли лесенкой. */
+.xkop-controls .cbi-button { margin: 0 !important; }
 
 /* Поля настроек. Штатная ширина LuCI рассчитана на узкие значения вроде
    номера порта, и ссылка подписки в неё не помещается целиком — при том, что

@@ -31,7 +31,7 @@ const WITH_RUSSIA_INSIDE = [
 
 function subscriptions(map) {
   const s = map.section(form.TypedSection, "subscription", _("Подписки"),
-    _("Своя ссылка, свои агенты, своё расписание. Каналы ссылаются на подписку, а не наоборот."));
+    _("Откуда берутся серверы туннеля. Обычно достаточно одной ссылки — остальное xkop сделает сам."));
   s.anonymous = false;
   s.addremove = true;
   s.addbtntitle = _("Добавить подписку");
@@ -63,7 +63,7 @@ function subscriptions(map) {
 
 function channels(map) {
   const s = map.section(form.TypedSection, "channel", _("Каналы"),
-    _("Куда можно направить трафик. Канал самодостаточен."));
+    _("Куда можно отправить трафик: через подписку, напрямую или в блок. Готовые каналы уже есть — трогать их нужно, только если подписок несколько."));
   s.anonymous = false;
   s.addremove = true;
   s.addbtntitle = _("Добавить канал");
@@ -92,11 +92,11 @@ function channels(map) {
 }
 
 function profiles(map) {
-  const s = map.section(form.TypedSection, "profile", _("Профили"),
-    _("Что направляем. Намерение, а не перечень: «заблокированное в РФ», «только эти домены»."));
+  const s = map.section(form.TypedSection, "profile", _("Списки"),
+    _("Что направлять: категории сообщества, свои домены и подсети. Куда их отправить — на вкладке «Маршруты»."));
   s.anonymous = false;
   s.addremove = true;
-  s.addbtntitle = _("Добавить профиль");
+  s.addbtntitle = _("Добавить список");
 
   let o = s.option(form.Value, "title", _("Название"));
   o.placeholder = _("Заблокированное в РФ");
@@ -205,20 +205,20 @@ function profiles(map) {
 // Привязка отвечает на один вопрос: что куда направить. Поэтому и профиль,
 // и канал — списки уже заведённого, а не поля, где надо вспомнить имя секции.
 function bindings(map) {
-  const s = map.section(form.TypedSection, "binding", _("Привязки"),
-    _("Что куда направить: профиль (какие домены) в канал (каким путём). Из этих строк и складывается маршрутизация."));
+  const s = map.section(form.TypedSection, "binding", _("Маршруты"),
+    _("Какой список куда отправить. Одна строка — одно правило: «Заблокированное в РФ» → «через подписку». Всё, что ни в один список не попало, идёт напрямую."));
   s.anonymous = false;
   s.addremove = true;
-  s.addbtntitle = _("Добавить привязку");
+  s.addbtntitle = _("Добавить маршрут");
 
   let o = s.option(form.ListValue, "profile", _("Что направляем"),
-    _("Профиль со списками доменов и подсетей."));
+    _("Список с вкладки «Списки»."));
   uci.sections("xkop", "profile", function (sec) {
     o.value(sec[".name"], (sec.title || sec[".name"]) + " (" + sec[".name"] + ")");
   });
 
   o = s.option(form.ListValue, "channel", _("Куда направляем"),
-    _("Канал: подписка, напрямую или блокировать."));
+    _("Канал с вкладки «Каналы»."));
   const channelTitles = {
     subscription: _("через подписку"),
     direct: _("напрямую"),
@@ -244,21 +244,25 @@ function dns(map) {
   const s = map.section(form.NamedSection, "settings", "dns", _("DNS"));
   s.anonymous = true;
   s.addremove = false;
+  s.tab("basic", _("Основное"));
+  s.tab("protect", _("Защита от обхода"));
+  s.tab("tuning", _("Тонкая настройка"));
 
-  let o = s.option(form.ListValue, "dns_mode", _("Режим"),
+
+  let o = s.taboption("basic", form.ListValue, "dns_mode", _("Режим"),
     _("«Не трогать» — имена движок узнаёт по самому соединению, dnsmasq остаётся как был. «Поддельные адреса» — движок отвечает сам, и dnsmasq переключается на него."));
   o.value("off", _("не трогать (по имени в соединении)"));
   o.value("fakeip", _("поддельные адреса (FakeIP)"));
   o.default = "off";
 
-  o = s.option(form.ListValue, "intercept", _("Что пускать через движок"),
-    _("«Только маршрутизируемое» — через движок идут поддельные адреса и подсети профилей, остальное ядро отдаёт напрямую: заметно быстрее. «Весь трафик» ловит и клиента с собственным DNS в обход роутера, но через движок идёт весь интернет."));
+  o = s.taboption("basic", form.ListValue, "intercept", _("Что пускать через движок"),
+    _("«Только маршрутизируемое» — через движок идут поддельные адреса и подсети списков, остальное ядро отдаёт напрямую: заметно быстрее. «Весь трафик» ловит и клиента с собственным DNS в обход роутера, но через движок идёт весь интернет."));
   o.value("routed", _("только маршрутизируемое (быстро)"));
   o.value("all", _("весь трафик клиентов (надёжнее)"));
   o.default = "routed";
   o.depends("dns_mode", "fakeip");
 
-  o = s.option(form.ListValue, "dns_type", _("Как спрашивать"),
+  o = s.taboption("basic", form.ListValue, "dns_type", _("Как спрашивать"),
     _("Способ обращения к резолверу."));
   o.value("doh", _("DoH, по HTTPS"));
   o.value("dot", _("DoT, по TLS"));
@@ -269,7 +273,7 @@ function dns(map) {
   // Список с возможностью вписать своё: form.Value с вариантами — это
   // выпадающий список, который не запрещает ввод. Схему подставляет генератор
   // по выбранному способу, поэтому здесь чистый адрес.
-  o = s.option(form.Value, "dns_server", _("Резолвер"),
+  o = s.taboption("basic", form.Value, "dns_server", _("Резолвер"),
     _("Адрес предпочтительнее имени: имя надо где-то разрешить, а порт 53 как раз и перехватывают."));
   [
     ["8.8.8.8", "8.8.8.8 (Google)"],
@@ -289,7 +293,7 @@ function dns(map) {
   o.default = "8.8.8.8";
   o.depends("dns_mode", "fakeip");
 
-  o = s.option(form.Value, "dns_bootstrap", _("Опорный резолвер"),
+  o = s.taboption("basic", form.Value, "dns_bootstrap", _("Опорный резолвер"),
     _("Нужен, только если основной задан именем: им это имя и разрешается."));
   [
     ["77.88.8.8", "77.88.8.8 (Яндекс)"],
@@ -302,65 +306,69 @@ function dns(map) {
   o.optional = true;
   o.depends("dns_mode", "fakeip");
 
-  o = s.option(form.DynamicList, "dns_extra_server", _("Дополнительные резолверы"),
+  o = s.taboption("basic", form.DynamicList, "dns_extra_server", _("Дополнительные резолверы"),
     _("Опрашиваются одновременно, берётся первый ответ. Здесь место шифрованному резолверу, заданному адресом: когда апстрим локального перехватят, его ответ отбракуется и возьмётся этот."));
   o.optional = true;
   o.depends("dns_mode", "fakeip");
 
-  o = s.option(form.Flag, "dns_cache", _("Кэш ответов"),
+  o = s.taboption("tuning", form.Flag, "dns_cache", _("Кэш ответов"),
     _("Обычно нужен: без него каждое имя спрашивается заново. Выключают в одном случае — когда сайт живёт на нескольких CDN сразу и один из них у провайдера не работает: закреплённый ответ держит сайт мёртвым до конца TTL, а без кэша следующая попытка попадёт на живой адрес. Переписи TTL, как в sing-box, у Xray нет — есть только это."));
   o.default = "1";
   o.rmempty = false;
 
-  o = s.option(form.Value, "dns_client_ip", _("Свой адрес для резолвера"),
+  o = s.taboption("tuning", form.Value, "dns_client_ip", _("Свой адрес для резолвера"),
     _("Внешний адрес роутера. Передаётся резолверу подсказкой, чтобы CDN отдавал ближний узел, а не тот, что рядом с резолвером. Пусто — не передаётся; внутренний адрес указывать бессмысленно."));
   o.optional = true;
   o.placeholder = "203.0.113.7";
 
-  o = s.option(form.Value, "dns_local_timeout_ms", _("Ожидание локального резолвера, мс"),
+  o = s.taboption("tuning", form.Value, "dns_local_timeout_ms", _("Ожидание локального резолвера, мс"),
     _("Сколько ждать ответа от резолвера на самом роутере (AdGuard Home, Pi-hole). Умолчание движка — четыре секунды, и это много: локальный либо отвечает мгновенно, либо его нет вовсе, а четыре секунды на каждое имя человек видит как «интернет умер»."));
   o.datatype = "uinteger";
   o.default = "1500";
   o.depends("dns_mode", "fakeip");
 
-  o = s.option(form.DynamicList, "sniff_excluded", _("Имена без подмены адреса"),
+  o = s.taboption("tuning", form.DynamicList, "sniff_excluded", _("Имена без подмены адреса"),
     _("Движок распознаёт имя внутри соединения и подменяет им адрес назначения. Для части сервисов это ломает работу молча: push-уведомления iOS перестают приходить, устройства Xiaomi теряют облако, в играх отваливается голосовой чат. Известные имена уже учтены; сюда добавляются свои."));
   o.optional = true;
   o.placeholder = "courier.push.apple.com";
 
-  o = s.option(form.Flag, "canary_enabled", _("Канарейка"),
+  o = s.taboption("basic", form.Flag, "canary_enabled", _("Канарейка"),
     _("Обнаружение подмены DNS провайдером: спрашивает то, чего не может существовать, и по ответу узнаёт адрес заглушки. Выученное движок отбраковывает сам."));
   o.default = "1";
 
-  o = s.option(form.Value, "canary_interval", _("Как часто проверять"),
+  o = s.taboption("basic", form.Value, "canary_interval", _("Как часто проверять"),
     _("Например 2m, 1h."));
   o.default = "2m";
   o.depends("canary_enabled", "1");
 
-  o = s.option(form.Flag, "dont_touch_dhcp", _("Не трогать dnsmasq"),
+  o = s.taboption("tuning", form.Flag, "dont_touch_dhcp", _("Не трогать dnsmasq"),
     _("Если резолвер настроен вручную и трогать его нельзя."));
   o.default = "0";
 
   // Защита от обхода. Выключено по умолчанию не из осторожности, а потому
   // что каждое из этих правил что-то ломает, и ломает молча.
-  o = s.option(form.Flag, "block_client_doh", _("Блокировать известные DoH"),
+  o = s.taboption("protect", form.Flag, "block_client_doh", _("Блокировать известные DoH"),
     _("Порт 853 целиком и известные публичные DoH на 443. Клиент со своим резолвером на произвольном адресе под это правило не попадёт."));
   o.default = "0";
 
-  o = s.option(form.Flag, "block_https_records", _("Отклонять записи HTTPS"),
+  o = s.taboption("protect", form.Flag, "block_https_records", _("Отклонять записи HTTPS"),
     _("Ломает автообнаружение DoH браузерами. Конфликтует с получением конфигурации ECH через DNS."));
   o.default = "0";
 
-  o = s.option(form.Flag, "block_ptr_records", _("Отклонять PTR"),
-    _("Иначе mDNS от устройств Apple даёт задержки в десятки секунд."));
+  o = s.taboption("protect", form.Flag, "block_ptr_records", _("Отклонять PTR"),
+    _("Отказ на обратные запросы «имя по адресу». Обычно не нужно: устройства Apple через DNS роутера их почти не шлют, их mDNS идёт мимо. Включать, только если в журнале видно много таких запросов."));
   o.default = "0";
 
-  o = s.option(form.Flag, "block_firefox_canary", _("Отклонять канарейку Firefox"),
+  o = s.taboption("protect", form.Flag, "block_firefox_canary", _("Отклонять канарейку Firefox"),
     _("Firefox сам выключит свой DoH, увидев отказ."));
   o.default = "0";
 
-  o = s.option(form.Flag, "disable_quic", _("Отключить QUIC"),
+  o = s.taboption("protect", form.Flag, "disable_quic", _("Отключить QUIC"),
     _("QUIC несёт своё шифрование и обходит разбор имени."));
+  o.default = "0";
+
+  o = s.taboption("tuning", form.Flag, "dns_parallel", _("Спрашивать резолверы одновременно"),
+    _("Берётся первый ответ. Включается само, когда резолверов больше одного."));
   o.default = "0";
 }
 
@@ -368,53 +376,58 @@ function system(map) {
   const s = map.section(form.NamedSection, "settings", "system", _("Система"));
   s.anonymous = true;
   s.addremove = false;
+  s.tab("devices", _("Устройства"));
+  s.tab("nodes", _("Выбор узла"));
+  s.tab("perf", _("Производительность"));
+  s.tab("service", _("Служебное"));
 
-  let o = s.option(form.DynamicList, "source_interface", _("Интерфейсы источника"),
+
+  let o = s.taboption("devices", form.DynamicList, "source_interface", _("Интерфейсы источника"),
     _("С каких интерфейсов брать трафик клиентов."));
   o.default = "br-lan";
   o.datatype = "string";
 
-  o = s.option(form.Value, "wan_interface", _("Интерфейс наружу"),
-    _("Через него уходит трафик самого движка."));
+  o = s.taboption("service", form.Value, "wan_interface", _("Интерфейс WAN"),
+    _("Когда он поднимается, xkop добирает то, что не смог при старте: подписки, списки, правила. Обычно wan.")); 
   o.default = "wan";
   o.optional = true;
 
-  o = s.option(form.DynamicList, "excluded_source_ip", _("Исключённые адреса"),
+  o = s.taboption("devices", form.DynamicList, "excluded_source_ip", _("Исключённые адреса"),
     _("Эти источники не маршрутизируются вовсе: трафик идёт мимо движка."));
   o.optional = true;
   o.placeholder = "192.168.1.3";
 
-  o = s.option(form.DynamicList, "fully_routed_ip", _("Только через туннель"),
-    _("Эти источники уходят в туннель целиком, независимо от списков и профилей."));
+  o = s.taboption("devices", form.DynamicList, "fully_routed_ip", _("Только через туннель"),
+    _("Эти источники уходят в туннель целиком, независимо от списков."));
   o.optional = true;
   o.placeholder = "192.168.1.10";
 
   // Правило перехода между узлами. Без допуска выбор скачет от шума
   // измерения: два узла с близкой задержкой меняются местами на каждой
   // проверке, и соединения рвутся на ровном месте.
-  o = s.option(form.Value, "switch_tolerance_ms", _("Допуск при смене узла, мс"),
+  o = s.taboption("nodes", form.Value, "switch_tolerance_ms", _("Допуск при смене узла, мс"),
     _("Насколько лучше должен быть другой узел, чтобы на него перешли. Меньше допуска — остаёмся на текущем."));
   o.datatype = "uinteger";
   o.default = "200";
 
-  o = s.option(form.Value, "max_delay_ms", _("Порог задержки, мс"),
+  o = s.taboption("nodes", form.Value, "max_delay_ms", _("Порог задержки, мс"),
     _("Выше этого узел меняют, даже если он лучший из живых. 0 — не смотреть на это вовсе."));
   o.datatype = "uinteger";
   o.default = "0";
 
-  o = s.option(form.Flag, "access_log", _("Журнал доступа"),
+  o = s.taboption("service", form.Flag, "access_log", _("Журнал доступа"),
     _("Строка на соединение с выбранным исходящим. На нём держится разбор маршрута."));
   o.default = "1";
 
-  o = s.option(form.Value, "lists_update_interval", _("Обновление списков"),
+  o = s.taboption("service", form.Value, "lists_update_interval", _("Обновление списков"),
     _("Например 1d."));
   o.default = "1d";
 
-  o = s.option(form.Flag, "exclude_ntp", _("Не трогать NTP"),
+  o = s.taboption("service", form.Flag, "exclude_ntp", _("Не трогать NTP"),
     _("Синхронизация времени идёт напрямую."));
   o.default = "0";
 
-  o = s.option(form.Value, "metrics_port", _("Порт метрик"),
+  o = s.taboption("service", form.Value, "metrics_port", _("Порт метрик"),
     _("Локальный эндпоинт движка, из которого берутся все числа обзора."));
   o.datatype = "port";
   o.default = "11111";
@@ -426,31 +439,27 @@ function system(map) {
   // памяти: движок однажды съел 350 МБ из 485, и роутеру осталось восемь.
   // Менять эти три значения можно было только через uci, то есть человек,
   // упёршийся в память, не имел к ним доступа вовсе.
-  o = s.option(form.Value, "buffer_size_kb", _("Буфер соединения, КБ"),
-    _("На каждое направление каждого соединения. Умолчание движка — 512 и рассчитано на настольную машину; на роутере это сотни мегабайт."));
+  o = s.taboption("perf", form.Value, "buffer_size_kb", _("Буфер соединения, КБ"),
+    _("На каждое соединение. Движок сам выбирает по процессору: 0 на arm и mips, 4 на arm64 и mips64, 512 на x86. В замерах xkop размер не менял ни скорость, ни нагрузку на процессор, а память растёт с каждым соединением — трогать незачем."));
   o.datatype = "uinteger";
   o.default = "4";
 
-  o = s.option(form.Value, "conn_idle_seconds", _("Простой соединения, с"),
+  o = s.taboption("perf", form.Value, "conn_idle_seconds", _("Простой соединения, с"),
     _("Через сколько молчания соединение закрывается. Меньше — меньше памяти, но обрываются долгие сессии."));
   o.datatype = "uinteger";
   o.default = "300";
 
-  o = s.option(form.Value, "handshake_seconds", _("Ожидание рукопожатия, с"),
+  o = s.taboption("perf", form.Value, "handshake_seconds", _("Ожидание рукопожатия, с"),
     _("Сколько ждать ответа узла при установке соединения."));
   o.datatype = "uinteger";
   o.default = "4";
 
-  o = s.option(form.Flag, "dns_parallel", _("Спрашивать резолверы одновременно"),
-    _("Берётся первый ответ. Включается само, когда резолверов больше одного."));
-  o.default = "0";
-
-  o = s.option(form.Value, "output_interface", _("Интерфейс наружу"),
+  o = s.taboption("service", form.Value, "output_interface", _("Выходной интерфейс движка"),
     _("Пусто — решает таблица маршрутизации роутера, и это правильно почти всегда. Задавать имя стоит только там, где выходов несколько."));
   o.optional = true;
   o.placeholder = "wan";
 
-  o = s.option(form.ListValue, "log_level", _("Подробность журнала"));
+  o = s.taboption("service", form.ListValue, "log_level", _("Подробность журнала"));
   o.value("none", _("молчать"));
   o.value("error", _("ошибки"));
   o.value("warning", _("предупреждения"));
@@ -460,10 +469,12 @@ function system(map) {
 
 return L.Class.extend({
   build: function (map) {
+    // Порядок вкладок - порядок мысли: откуда серверы, что направлять,
+    // куда. Каналы - последними: готовые есть сразу, а трогают их редко.
     subscriptions(map);
-    channels(map);
     profiles(map);
     bindings(map);
+    channels(map);
     dns(map);
     system(map);
   },

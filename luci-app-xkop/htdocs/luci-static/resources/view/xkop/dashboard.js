@@ -158,7 +158,10 @@ function renderServiceWidget(data, refresh) {
 
   const body = [
     big(running ? _("работает") : _("остановлен")),
-    E("div", { class: "xkop-widget-note" }, svc.state || ""),
+    // Подпись — только если говорит что-то сверх крупной строки: «работает»
+    // дважды подряд читалось как сбой вёрстки.
+    (svc.state && svc.state !== (running ? _("работает") : _("остановлен")))
+      ? E("div", { class: "xkop-widget-note" }, svc.state) : "",
     line(_("движок"),
       eng.engine_installed ? "Xray " + (eng.engine_version || "?") : _("не установлен"),
       eng.engine_installed && eng.engine_version_ok === false ? _("версия ниже требуемой") : ""),
