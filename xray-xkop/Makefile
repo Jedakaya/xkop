@@ -26,7 +26,7 @@ include $(TOPDIR)/rules.mk
 # the last one that is not.
 
 PKG_NAME:=xray-xkop
-PKG_VERSION:=26.7.28
+PKG_VERSION:=26.9.9
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Jedakaya
@@ -54,17 +54,17 @@ XRAY_ASSET_mips64el:=Xray-linux-mips64le
 XRAY_ASSET_mips64:=Xray-linux-mips64
 XRAY_ASSET_riscv64:=Xray-linux-riscv64
 
-XRAY_HASH_Xray-linux-64:=8195d909f1109b8f3d99eefe401a3c451d7bf4af71f24d3815420f77e5dd2a40
-XRAY_HASH_Xray-linux-32:=87ee3f90e48fe4b930c69ba4bcf7376a44e9b6caebbe8d4479b3b795c8ff3fa2
-XRAY_HASH_Xray-linux-arm64-v8a:=f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501
-XRAY_HASH_Xray-linux-arm32-v7a:=a23cae6991ea1224e4e3381cae4ada8c3d5afc438a851ab0b2eda2f391dc4072
-XRAY_HASH_Xray-linux-arm32-v6:=8a6e29f36d16a25ea4c80ddabf1cca79f9d06e73a7a2170dc1b5726d6b8afda5
-XRAY_HASH_Xray-linux-arm32-v5:=f11efbba5174b0f676d332153a60f261e896415de072e0553440ba9cee7b0c06
-XRAY_HASH_Xray-linux-mips32le:=4779e1afba7dea12c64a72380f1d9737a12359f354014625a7f9d96f8d31e3fa
-XRAY_HASH_Xray-linux-mips32:=aec600118fd1e7ee42e8d5e8d5c82cc5e8139e82ff1da029e9b81b7170fc028c
-XRAY_HASH_Xray-linux-mips64le:=5e5f28532e8bde40fdb3dd3133487119147a39dd6e611ea53b830c7dc10d6ad1
-XRAY_HASH_Xray-linux-mips64:=f2da91e931b0df28ca8a8c71d8c0a8f17aa2be6f9798e6874d46d66197aa2fd9
-XRAY_HASH_Xray-linux-riscv64:=aba048426d8a3381751e53c54af6f84c9f831d881dc28aed77bd7b40bc1814c0
+XRAY_HASH_Xray-linux-64:=1eb9175d0f0a8f8149c9230a7fc5ae66ce332ed20a53155ce61fe62e3f58b7df
+XRAY_HASH_Xray-linux-32:=52a825a06d77f6e2d0d72d8d873b1fd277ae503ac9a2aedb112f4f5db0e347e0
+XRAY_HASH_Xray-linux-arm64-v8a:=3e38d72dfc5eb65c91df0e5583e9b6676c32232041da47de6ae73946b526d66c
+XRAY_HASH_Xray-linux-arm32-v7a:=5b2a9e2767c0197f7bd41c2db133f91440e845771e621178e0fd2b8520228e5f
+XRAY_HASH_Xray-linux-arm32-v6:=259583689327b21e696e0837b4f6a57dc3c2ef07d63edec64be7ec54eb356f19
+XRAY_HASH_Xray-linux-arm32-v5:=09628b8657037fcf155ed2498ba54b5a2c778212ae2193042fe54d789a26c039
+XRAY_HASH_Xray-linux-mips32le:=e572d2cdd819318383460443140898e6117e8e0da5f0c359b25f6c890b8d81a2
+XRAY_HASH_Xray-linux-mips32:=4b9838c570f283d7104e0c775df3562a4f12f33c06e6c77ddcf2319845bf47ba
+XRAY_HASH_Xray-linux-mips64le:=fe3d2d9c696d9256e0e139e4ad4c5da164b232a1a11cf7183830003bd0de75b4
+XRAY_HASH_Xray-linux-mips64:=2e43c5cfb27a0e2af0570b6f1d09491a3dd3a1e9670cd87d64ff9d7539d49cac
+XRAY_HASH_Xray-linux-riscv64:=032663d3ef60278dc40e225c6fff8514ed850473e8845337bad08af9badbb449
 
 # The OpenWrt architecture is "family_cpu", and the family is what decides the
 # binary: aarch64_cortex-a53 and aarch64_generic take the same one.
