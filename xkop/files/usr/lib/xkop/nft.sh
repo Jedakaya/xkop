@@ -71,6 +71,16 @@ table inet $XKOP_NFT_TABLE {
         auto-merge
         elements = { ::1/128, fc00::/7, fe80::/10, ff00::/8 }
     }
+
+    # Байты клиентов, прошедшие мимо движка. Движок видит только то, что ему
+    # отдали, и при выборочном перехвате прямой трафик в его счётчики не
+    # попадает вовсе: распределение показывало туннель под сто процентов,
+    # пока человек листал сайты напрямую.
+    counter bypass_up {
+    }
+
+    counter bypass_down {
+    }
 $(if [ -n "$excluded_elements" ]; then
 cat << EXCLUDED
 
@@ -96,6 +106,17 @@ cat << ROUTED
     }
 ROUTED
 fi)
+
+    # Перехваченное доставляется движку локально и в forward не попадает.
+    # Всё, что здесь, ушло напрямую, минуя движок.
+    chain passby {
+        type filter hook forward priority -1; policy accept;
+
+        iifname @interfaces ip daddr != @local4 counter name "bypass_up"
+        iifname @interfaces ip6 daddr != @local6 counter name "bypass_up"
+        oifname @interfaces ip saddr != @local4 counter name "bypass_down"
+        oifname @interfaces ip6 saddr != @local6 counter name "bypass_down"
+    }
 
     chain mangle {
         type filter hook prerouting priority -150; policy accept;

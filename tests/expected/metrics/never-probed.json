@@ -29,7 +29,9 @@
       "uplink": 150,
       "downlink": 1350,
       "total": 1500
-    }
+    },
+    "bypass": null,
+    "clients_total": 1500
   },
   "distribution": {
     "direct": {

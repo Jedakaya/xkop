@@ -24,7 +24,9 @@
       "uplink": 0,
       "downlink": 0,
       "total": 0
-    }
+    },
+    "bypass": null,
+    "clients_total": 0
   },
   "distribution": {
     "direct": {

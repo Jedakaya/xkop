@@ -256,8 +256,11 @@ function renderSavingsWidget(stats) {
     return widget(_("Всего"), E("div", { class: "xkop-empty" }, _("Нет данных")));
   }
 
-  const total = stats.traffic && stats.traffic.outbound_total
-    ? stats.traffic.outbound_total.total : 0;
+  // Трафик клиентов, а не всё, что отправил движок: пробы узлов на роутере
+  // без клиентов давали «прошло через роутер» и сто процентов туннеля.
+  const t = stats.traffic || {};
+  const total = t.clients_total != null ? t.clients_total
+    : (t.outbound_total ? t.outbound_total.total : 0);
   const tunnelled = stats.distribution.proxy ? stats.distribution.proxy.bytes : 0;
   const saved = Math.max(0, total - tunnelled);
 
@@ -691,6 +694,7 @@ return L.Class.extend({
 
       fill("savings", key([st.ok,
         st.traffic && st.traffic.outbound_total && st.traffic.outbound_total.total,
+        st.traffic && st.traffic.clients_total,
         d.proxy && d.proxy.bytes]),
         function () { return renderSavingsWidget(st); });
 

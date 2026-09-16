@@ -22,7 +22,7 @@ jq -nc \
         summary: ($check.summary // "состояние неизвестно"),
         running: ($check.service.engine.running // false),
         distribution: ($stats.distribution // null),
-        total: ($stats.traffic.outbound_total.total // 0),
+        total: ($stats.traffic.clients_total // $stats.traffic.outbound_total.total // 0),
         subscriptions: [ $subs[] | {
             id: .subscription, state: .state, reason: .reason, servers: .servers,
             announce: (.panel.announce // null),

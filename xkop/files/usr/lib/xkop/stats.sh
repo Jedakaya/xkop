@@ -49,6 +49,23 @@ stats_failure() {
         }'
 }
 
+# Байты мимо движка из именованных счётчиков nft, {up, down}. Счётчиков нет
+# (правила не применены, старый набор) — null, и распределение считается
+# по одному движку, как раньше.
+stats_bypass_json() {
+    local up down
+    command -v nft > /dev/null 2>&1 || { printf 'null'; return 0; }
+    up=$(nft list counter inet "$XKOP_NFT_TABLE" bypass_up 2> /dev/null \
+        | sed -n 's/.*bytes \([0-9][0-9]*\).*/\1/p' | head -n 1)
+    down=$(nft list counter inet "$XKOP_NFT_TABLE" bypass_down 2> /dev/null \
+        | sed -n 's/.*bytes \([0-9][0-9]*\).*/\1/p' | head -n 1)
+    if [ -z "$up" ] || [ -z "$down" ]; then
+        printf 'null'
+        return 0
+    fi
+    printf '{"up":%s,"down":%s}' "$up" "$down"
+}
+
 cmd_stats() {
     local address url response curl_exit http_code body output
 
@@ -82,6 +99,7 @@ cmd_stats() {
         printf '%s' "$body" | jq \
             --arg address "$address" \
             --argjson collected_at "$(date +%s)" \
+            --argjson bypass "$(stats_bypass_json)" \
             -f "$XKOP_LIB_DIR/stats.jq" 2> /dev/null
     )
 

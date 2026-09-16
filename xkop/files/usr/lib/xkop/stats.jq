@@ -80,6 +80,32 @@ def distribution:
         }
     );
 
+# Распределение трафика клиентов, а не всего, что отправил движок.
+#
+# Счётчики исходящих узлов включают пробы наблюдателя: на роутере без единого
+# клиента туннель показывал сто процентов. Клиентское в туннеле — это то, что
+# вошло через tproxy-in, за вычетом ушедшего из движка напрямую и в блок.
+# Пробы идут через свой вход и сюда не попадают.
+#
+# Напрямую — прямое внутри движка плюс байты мимо движка из счётчиков nft:
+# при выборочном перехвате прямой трафик до движка не доходит вовсе.
+def client_distribution($outbound; $inbound; $bypass):
+    ($outbound | distribution) as $raw
+    | (($inbound["tproxy-in"].total) // null) as $clients_in
+    | if $clients_in == null then $raw
+      else
+        ($raw.direct.bytes + (if $bypass == null then 0 else (($bypass.up // 0) + ($bypass.down // 0)) end)) as $direct
+        | $raw.blocked.bytes as $blocked
+        | ([$clients_in - $raw.direct.bytes - $blocked, 0] | max) as $proxy
+        | $raw.service.bytes as $service
+        | ($direct + $proxy + $blocked + $service) as $sum
+        | {direct: $direct, proxy: $proxy, blocked: $blocked, service: $service}
+        | with_entries(.value = {
+            bytes: .value,
+            share: (if $sum == 0 then 0 else ((.value * 10000 / $sum) | round) / 10000 end)
+          })
+      end;
+
 def node_from_status($tag; $s):
     ($s.health_ping) as $hp
     | ($s.alive // false) as $alive
@@ -179,6 +205,8 @@ else
         | map(select(role(.) == "proxy"))
         | map(select(. as $t | $observed_tags | index($t) | not))
       ) as $unobserved_tags
+    | ($ARGS.named.bypass // null) as $bypass
+    | client_distribution($outbound; $inbound; $bypass) as $dist
     | envelope(true; null; null)
     + {
         traffic: {
@@ -187,9 +215,15 @@ else
             # Sum over outbounds - what actually left the router. Deliberately
             # not the inbound sum: the two differ, and a key called just
             # "total" would leave the interface guessing which one it got.
-            outbound_total: ($outbound | sum_counters)
+            outbound_total: ($outbound | sum_counters),
+            # Мимо движка, из счётчиков nft. null — счётчиков нет.
+            bypass: $bypass,
+            # Трафик клиентов: то, что делится на напрямую, туннель и блок.
+            # Пробы узлов и служебное сюда не входят — это и есть число
+            # «прошло через роутер».
+            clients_total: ($dist.direct.bytes + $dist.proxy.bytes + $dist.blocked.bytes)
         },
-        distribution: ($outbound | distribution),
+        distribution: $dist,
         observatory: (
             if ($obs | type) != "object" then
                 {state: "disabled", nodes: []}

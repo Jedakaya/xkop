@@ -48,6 +48,48 @@ for fixture in "$ROOT"/tests/fixtures/metrics/*.json; do
     fi
 done
 
+# --- распределение считает клиентов, а не пробы ---------------------------
+
+dist() {
+    printf '%s' "$1" | "$JQ" -c --arg address "$ADDRESS" --argjson collected_at "$COLLECTED_AT" \
+        --argjson bypass "$2" -f "$PROGRAM" 2>&1 | tr -d '\r'
+}
+
+check() {
+    total=$((total + 1))
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: ожидалось '$2', получено '$3'"
+        failed=$((failed + 1))
+    fi
+}
+
+# Роутер без клиентов: на узлах только пробы наблюдателя. Туннель показывал
+# сто процентов.
+idle='{"stats":{"inbound":{"tproxy-in":{"uplink":0,"downlink":0},"probe-in":{"uplink":0,"downlink":0}},
+ "outbound":{"direct":{"uplink":0,"downlink":0},"block":{"uplink":0,"downlink":0},
+ "node-a":{"uplink":8000,"downlink":10000}}}}'
+out=$(dist "$idle" '{"up":0,"down":0}')
+check "пробы узлов — не туннель" "0" "$(printf '%s' "$out" | "$JQ" '.distribution.proxy.bytes')"
+check "без клиентов и всего ноль" "0" "$(printf '%s' "$out" | "$JQ" '.traffic.clients_total')"
+
+# Выборочный перехват: в движок вошло 1000 байт, из них 200 ушли напрямую
+# из движка; 5000 байт прошли мимо движка вовсе. Узел отправил больше
+# вошедшего — пробы сверху.
+busy='{"stats":{"inbound":{"tproxy-in":{"uplink":400,"downlink":600}},
+ "outbound":{"direct":{"uplink":100,"downlink":100},"block":{"uplink":0,"downlink":0},
+ "node-a":{"uplink":2000,"downlink":3000}}}}'
+out=$(dist "$busy" '{"up":1000,"down":4000}')
+check "туннель — вошедшее минус прямое" "800" "$(printf '%s' "$out" | "$JQ" '.distribution.proxy.bytes')"
+check "напрямую — из движка и мимо него" "5200" "$(printf '%s' "$out" | "$JQ" '.distribution.direct.bytes')"
+check "доля туннеля от клиентского" "0.1333" "$(printf '%s' "$out" | "$JQ" '.distribution.proxy.share')"
+
+# Счётчиков nft нет — мимо движка ничего не прибавляется, но пробы всё равно
+# не туннель.
+out=$(dist "$busy" 'null')
+check "без счётчиков nft напрямую только из движка" "200" "$(printf '%s' "$out" | "$JQ" '.distribution.direct.bytes')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

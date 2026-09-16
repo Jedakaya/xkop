@@ -50,16 +50,18 @@
       "uplink": 1506500000,
       "downlink": 12105500000,
       "total": 13612000000
-    }
+    },
+    "bypass": null,
+    "clients_total": 13609000000
   },
   "distribution": {
     "direct": {
       "bytes": 11000000000,
-      "share": 0.8081
+      "share": 0.808
     },
     "proxy": {
-      "bytes": 2403000000,
-      "share": 0.1765
+      "bytes": 2405000000,
+      "share": 0.1767
     },
     "blocked": {
       "bytes": 204000000,
