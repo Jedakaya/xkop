@@ -136,14 +136,42 @@ cmd_subscriptions() {
     printf ']\n'
 }
 
+# Обновлённая подписка обязана доехать до движка.
+#
+# Обновление клало серверы в кэш и на этом заканчивалось: ни ежечасная
+# задача, ни кнопка не пересобирали конфигурацию, а ежедневная сборка
+# писала файл, не перезапуская движок. Сменившиеся у провайдера узлы или
+# ключи работали только после перезапуска службы. Перезапуск здесь — только
+# когда конфигурация действительно изменилась (config_generate вернул 0)
+# и служба запущена: остановленную обновление не поднимает.
+subscription_apply() {
+    config_generate > /dev/null 2>&1 || return 0
+    engine_process_running || return 0
+    log_info "подписка изменила конфигурацию, перезапускаю движок"
+    /etc/init.d/xkop restart > /dev/null 2>&1
+}
+
 # Человек, нажавший «обновить», ждёт запроса к панели, а не рассказа
 # про расписание. По расписанию обновляется то, чему пора, — это делает
 # задача cron, а не эта команда.
+#
+# Применение — отдельным сеансом: вызов приходит из LuCI через rpcd,
+# и перезапуск в нём выводил бы запрос за таймаут интерфейса.
+#
+# Не «( ... &)»: rpcd такой вызов не отпускал до своего таймаута в тридцать
+# секунд, даже когда все процессы уже завершились, — проверено через
+# ubus call file exec. start-stop-daemon -b уводит процесс в новый сеанс,
+# и ответ приходит сразу.
 cmd_subscription_update() {
     if [ -n "${1:-}" ]; then
         subscription_update "$1"
     else
         subscription_update_all force
+    fi
+    if command -v start-stop-daemon > /dev/null 2>&1; then
+        start-stop-daemon -S -b -x /usr/bin/xkop -- subscription_apply > /dev/null 2>&1
+    else
+        subscription_apply > /dev/null 2>&1
     fi
     cmd_subscriptions
 }
@@ -216,10 +244,15 @@ main() {
         subscription_update)
             cmd_subscription_update "$@"
             ;;
+        subscription_apply)
+            # Служебная: её запускает subscription_update отдельным сеансом.
+            subscription_apply
+            ;;
         subscription_refresh)
             # Задача по расписанию: спрашивает только те подписки, которым
             # пора по их собственному интервалу.
             subscription_update_all
+            subscription_apply
             cmd_subscriptions
             ;;
         get_subscription_userinfo)

@@ -456,11 +456,24 @@ function renderSubscriptions(subs, refresh) {
     E("button", {
       class: "cbi-button cbi-button-action",
       click: ui.createHandlerFn(this, function () {
+        // Ответ команды — список подписок, а не объект с ok. Кнопка ждала ok
+        // и на любой, даже удачный, ответ писала «Не вышло: ?». Теперь
+        // показывается, что стало с каждой подпиской, её же словами.
         return api.subscriptionUpdate().then(function (r) {
-          ui.addNotification(null,
-            E("p", {}, r && r.ok ? _("Подписки обновлены")
-                                 : _("Не вышло: ") + ((r && r.error) || "?")),
-            r && r.ok ? "info" : "warning");
+          if (!Array.isArray(r)) {
+            ui.addNotification(null,
+              E("p", {}, _("Не вышло: ") + ((r && r.error) || _("нет ответа"))), "warning");
+            return refresh();
+          }
+          const names = { ready: _("готова"), stale: _("устаревает"), empty: _("пустая"),
+            rejected: _("отвергнута"), blocked: _("отказ панели"), absent: _("не задана") };
+          const good = r.every(function (s) { return s.state === "ready"; });
+          ui.addNotification(null, E("p", {}, r.length
+            ? r.map(function (s) {
+                return s.subscription + ": " + (names[s.state] || s.state)
+                  + ", " + (s.servers || 0) + _(" серверов");
+              }).join("; ")
+            : _("Подписок нет")), good ? "info" : "warning");
           return refresh();
         });
       }),
