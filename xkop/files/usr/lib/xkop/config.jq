@@ -312,8 +312,18 @@ def dns_servers:
     | (if fakeip_enabled and ((dns_real_domains | length) > 0) then
         [ {address: $primary, domains: dns_real_domains} ]
        else [] end)
+    # skipFallback — обязателен, и куплен разбором на живой сети.
+    #
+    # Без него подделка участвует в общем переборе серверов: резолвер
+    # отвечает «такого имени нет», движок идёт к следующему серверу, и
+    # следующий — FakeDNS, который выдаёт адрес на ЛЮБОЕ имя. Клиент получает
+    # адрес вместо отказа, идёт по нему в туннель, узел не может открыть
+    # несуществующее имя — и приложение ждёт таймаута там, где должно было
+    # получить мгновенное «нет». Так у Wildberries половина запросов уходила
+    # в никуда: половина его имён (wbx-content-v2, pay, videos) не существует
+    # вовсе. Отсюда же «failed to resolve ip: empty response» в журнале.
     + (if fakeip_enabled and ((routed_domains | length) > 0) then
-        [ {address: "fakedns", domains: routed_domains} ]
+        [ {address: "fakedns", domains: routed_domains, skipFallback: true} ]
        else [] end)
     # Отбраковка выученного ставится на КАЖДЫЙ сервер группы, а не только
     # на первый.

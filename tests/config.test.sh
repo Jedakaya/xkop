@@ -123,6 +123,16 @@ check "параллельный опрос при нескольких серв�
 check "запросы с DNS-слушателя уходят резолверу" '"dns-out"'     "$(q fakeip.json '[.routing.rules[] | select(.inboundTag != ["dns-internal"])][0].outboundTag')"
 check "пул поддельных адресов задан" '"198.18.0.0/15"'     "$(q fakeip.json '.fakedns.ipPool')"
 
+# Подделка отвечает только на свои имена.
+#
+# Без skipFallback она стоит в общем переборе: резолвер сказал «такого имени
+# нет», движок пошёл к следующему серверу — и подделка выдала адрес на имя,
+# которого не существует. Клиент шёл по нему в туннель и ждал таймаута.
+# Поймано на живой сети: у Wildberries часть имён (wbx-content-v2, pay,
+# videos) не существует вовсе, и сайт «работал частично».
+check "подделка не участвует в переборе" 'true' "$(q fakeip.json '[.dns.servers[] | select(.address == "fakedns")] | first | .skipFallback')"
+check "остальные серверы в переборе остались" 'true' "$(q fakeip.json '[.dns.servers[] | select(.address != "fakedns") | .skipFallback // false] | all(. == false)')"
+
 # Защита от обхода: клиент со своим резолвером мимо нас не ходит незаметно.
 check "по умолчанию ничего не блокируется" "0"     "$(q with-pool.json '[.routing.rules[] | select(.port? or .protocol?)] | length')"
 check "порт 853 закрыт целиком" '"block"'     "$(q protection.json '.routing.rules[] | select(.port? == 853) | .outboundTag')"
