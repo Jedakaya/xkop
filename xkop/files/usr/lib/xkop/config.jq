@@ -538,8 +538,20 @@ def balancer_strategy:
 
 def balancers_section:
     node_tags as $tags
+    | (.manual_pin // "") as $pin
     | if ($tags | length) == 0 then
         []
+      elif $pin != "" and ($tags | index($pin)) != null then
+        # Xray has no startup override field. An empty candidate set makes
+        # random use the exact fallback immediately, before health checks.
+        # Selectors match prefixes: avoid every outbound, including names
+        # supplied by subscriptions, rather than selecting the pin's prefix.
+        ($tags + [service_tags[]]) as $all_tags
+        | ("__xkop_manual__" | until(
+            . as $prefix | all($all_tags[]; startswith($prefix) | not);
+            . + "_")) as $unused
+        | [{tag: "pool", selector: [$unused],
+            strategy: {type: "random"}, fallbackTag: $pin}]
       else
         [{
             tag: "pool",

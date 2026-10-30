@@ -187,6 +187,13 @@ out=$(nodes_keep)
 check "выбор человека восстановлен после перезапуска" "manual"     "$(printf '%s' "$out" | "$JQ" -r '.result')"
 check "и это именно его узел, даже если он медленнее" "FI" "$(pinned)"
 
+# A temporary control API failure must not erase the user's choice.
+nodes_api() { return 1; }
+out=$(nodes_keep)
+check "ошибка API сохраняет ручной выбор" "FI" "$(cat "$(nodes_manual_marker)" 2>/dev/null)"
+check "ошибка восстановления сообщается" "false" "$(printf '%s' "$out" | "$JQ" -r '.ok')"
+nodes_api() { printf '%s' "$4" > "$work/pinned"; }
+
 # Узел пропал из пула — держать нечего, и метку надо убрать.
 reset
 printf 'YY' > "$(nodes_manual_marker)"
@@ -196,6 +203,7 @@ check "пропавший из пула выбор не восстанавлив
 # Возврат к автовыбору снимает память о ручном закреплении.
 reset
 printf 'FI' > "$(nodes_manual_marker)"
+nodes_apply_selection() { rm -f "$(nodes_manual_marker)"; }
 nodes_select auto > /dev/null
 check "автовыбор снимает память о ручном" ""     "$(cat "$(nodes_manual_marker)" 2> /dev/null)"
 

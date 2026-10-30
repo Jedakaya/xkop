@@ -222,35 +222,81 @@ nodes_manual_marker() {
 nodes_select() {
     local tag="$1"
 
-    mkdir -p "$XKOP_STATE_DIR" 2> /dev/null
-
-    if [ "$tag" = "auto" ] || [ -z "$tag" ]; then
-        rm -f "$(nodes_manual_marker)" 2> /dev/null
-        nodes_api bo -b "$XKOP_BALANCER_TAG" -r > /dev/null
-        case "$?" in
-            0) jq -nc '{ok: true, selection: "auto", selected: null}' ;;
-            2) jq -nc '{ok: false, error: "engine_not_found"}' ;;
-            *) jq -nc '{ok: false, error: "override_not_removed"}' ;;
-        esac
-        return 0
-    fi
-
-    if ! subscription_pool_all | jq -e --arg tag "$tag" 'any(.[]; .tag == $tag)' > /dev/null 2>&1; then
+    [ "$tag" != "auto" ] || tag=""
+    if [ -n "$tag" ] && ! subscription_pool_all | jq -e --arg tag "$tag" 'any(.[]; .tag == $tag)' > /dev/null 2>&1; then
         jq -nc --arg tag "$tag" \
             '{ok: false, error: "unknown_node", detail: {tag: $tag}}'
         return 0
     fi
 
-    nodes_api bo -b "$XKOP_BALANCER_TAG" "$tag" > /dev/null
-    case "$?" in
-        0)
-            printf '%s' "$tag" > "$(nodes_manual_marker)"
-            jq -nc --arg tag "$tag" '{ok: true, selection: "manual", selected: $tag}'
-            ;;
-        2) jq -nc '{ok: false, error: "engine_not_found"}' ;;
-        *) jq -nc --arg tag "$tag" '{ok: false, error: "override_failed", detail: {tag: $tag}}' ;;
-    esac
+    if ! nodes_apply_selection "$tag"; then
+        jq -nc --arg tag "$tag" '{ok: false, error: "selection_not_applied", detail: {tag: $tag}}'
+        return 0
+    fi
+    rm -f "$(nodes_autopin_marker)" 2> /dev/null
+    jq -nc --arg tag "$tag" '{ok: true,
+        selection: (if $tag == "" then "auto" else "manual" end),
+        selected: (if $tag == "" then null else $tag end)}'
 }
+
+# Persist the same routing that is applied live: a procd respawn must not
+# resurrect the previous selection. Replacing routing preserves connections.
+# On an API error restore both copies; a timeout may have applied the request.
+nodes_apply_selection() (
+    umask 077
+    local tag="$1" candidate backup generated marker marker_tmp previous_pin
+    marker=$(nodes_manual_marker)
+    candidate="$XKOP_CONFIG_PATH.select-$$"
+    backup="$XKOP_RUN_DIR/selection-$$.previous.json"
+    generated="$XKOP_RUN_DIR/selection-$$.generated.json"
+    marker_tmp="$marker.select-$$"
+    previous_pin=$(cat "$marker" 2> /dev/null)
+    [ -n "$previous_pin" ] || previous_pin=$(cat "$(nodes_autopin_marker)" 2> /dev/null)
+    mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" || return 1
+    # Change only balancers: cached subscriptions/settings may be newer than
+    # the running engine. A selection must not install un-applied outbounds.
+    if ! config_input_json "$tag" | jq -f "$XKOP_LIB_DIR/config.jq" > "$generated" \
+        || ! jq -e --slurpfile generated "$generated" --arg tag "$tag" '
+            [.outbounds[].tag] as $active
+            | if $tag != "" and ($active | index($tag)) == null then
+                error("selected node is not installed")
+              else . end
+            | .routing.balancers = $generated[0].routing.balancers
+            | if $tag == "" then
+                .burstObservatory.subjectSelector as $observed
+                | .routing.balancers[].selector = $observed
+              else
+                ("__xkop_manual__" | until(
+                    . as $prefix | all($active[]; startswith($prefix) | not);
+                    . + "_")) as $unused
+                | .routing.balancers[].selector = [$unused]
+              end
+            ' "$XKOP_CONFIG_PATH" > "$candidate" \
+        || ! config_validate "$candidate" \
+        || ! cp "$XKOP_CONFIG_PATH" "$backup" \
+        || ! printf '%s' "$tag" > "$marker_tmp"; then
+        rm -f "$candidate" "$backup" "$marker_tmp" "$generated"
+        return 1
+    fi
+    if ! mv "$candidate" "$XKOP_CONFIG_PATH"; then
+        rm -f "$candidate" "$backup" "$marker_tmp" "$generated"
+        return 1
+    fi
+    if nodes_api adrules "$XKOP_CONFIG_PATH" > /dev/null 2>&1 \
+        && { [ -z "$tag" ] || nodes_api bo -b "$XKOP_BALANCER_TAG" "$tag" > /dev/null 2>&1; }; then
+        if { [ -n "$tag" ] && mv "$marker_tmp" "$marker"; } \
+            || { [ -z "$tag" ] && rm -f "$marker"; }; then
+            rm -f "$marker_tmp" "$backup" "$generated"
+            return 0
+        fi
+    fi
+    mv "$backup" "$XKOP_CONFIG_PATH"
+    nodes_api adrules "$XKOP_CONFIG_PATH" > /dev/null 2>&1 \
+        || log_warn "не удалось подтвердить откат выбора узла, повторите выбор"
+    [ -z "$previous_pin" ] || nodes_api bo -b "$XKOP_BALANCER_TAG" "$previous_pin" > /dev/null 2>&1
+    rm -f "$marker_tmp" "$generated"
+    return 1
+)
 
 # Удержание выбранного узла.
 #
@@ -300,10 +346,6 @@ nodes_max_delay() {
 }
 
 nodes_keep() {
-    # Заодно обновляем свои замеры задержки: раз в пять минут, не на каждую
-    # отрисовку обзора.
-    nodes_measure_rtt
-
     local selection override current marker mine chosen tolerance max_delay
     local stats alive best best_delay current_delay reason=""
 
@@ -322,7 +364,11 @@ nodes_keep() {
     # закрепление при перезапуске, а решение осталось.
     chosen=$(cat "$(nodes_manual_marker)" 2> /dev/null)
     if [ -n "$chosen" ] && [ -z "$override" ]; then
-        if subscription_pool_all | jq -e --arg tag "$chosen"             'any(.[]; .tag == $tag)' > /dev/null 2>&1             && nodes_api bo -b "$XKOP_BALANCER_TAG" "$chosen" > /dev/null 2>&1; then
+        if subscription_pool_all | jq -e --arg tag "$chosen" 'any(.[]; .tag == $tag)' > /dev/null 2>&1; then
+            if ! nodes_api bo -b "$XKOP_BALANCER_TAG" "$chosen" > /dev/null 2>&1; then
+                jq -nc --arg tag "$chosen" '{ok: false, error: "override_failed", detail: {tag: $tag}}'
+                return 0
+            fi
 
             log_info "восстановлен закреплённый вручную узел: $chosen"
             jq -nc --arg tag "$chosen"                 '{ok: true, result: "manual", selected: $tag,
@@ -334,6 +380,9 @@ nodes_keep() {
         rm -f "$(nodes_manual_marker)" 2> /dev/null
         log_warn "закреплённый вручную узел $chosen пропал из пула, возвращаю автовыбор"
     fi
+
+    # Restore the choice before doing any potentially slow network probes.
+    nodes_measure_rtt
 
     # Чужое закрепление - решение человека, и оно не обсуждается.
     if [ -n "$override" ] && [ "$override" != "$mine" ]; then

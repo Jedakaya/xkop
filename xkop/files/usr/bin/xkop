@@ -282,10 +282,15 @@ main() {
             nodes_json
             ;;
         select)
-            # Ручное закрепление снимает метку автоматики: дальше решение
-            # принадлежит человеку, и удержание в него не вмешивается.
-            rm -f "$(nodes_autopin_marker)" 2> /dev/null
-            nodes_select "${1:-auto}"
+            # Selection also persists startup routing; serialize with rebuilds.
+            if lock_acquire work; then
+                trap 'lock_release work' EXIT INT TERM
+                nodes_select "${1:-auto}"
+                lock_release work
+                trap - EXIT INT TERM
+            else
+                jq -nc '{ok: false, error: "busy", detail: {task: "work"}}'
+            fi
             ;;
         keep)
             # Под замком: рядом может идти canary с перезапуском службы,

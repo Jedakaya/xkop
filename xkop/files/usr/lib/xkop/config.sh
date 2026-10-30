@@ -200,11 +200,14 @@ config_bindings_json() {
 }
 
 config_input_json() {
+    # An explicit empty argument means automatic selection.
+    local pin="${1-$(cat "$XKOP_STATE_DIR/manualpin" 2> /dev/null)}"
     jq -nc \
+        --arg manual_pin "$pin" \
         --argjson settings "$(config_settings_json)" \
         --argjson pool "$(subscription_pool_all)" \
         --argjson bindings "$(config_bindings_json)" \
-        '{settings: $settings, pool: $pool, bindings: $bindings}'
+        '{settings: $settings, pool: $pool, bindings: $bindings, manual_pin: $manual_pin}'
 }
 
 config_engine_bin() {
