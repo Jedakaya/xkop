@@ -39,7 +39,10 @@ log_error() { :; }
 # shellcheck source=/dev/null
 . "$LIB/lock.sh"
 
-check "первый берёт замок" "0" "$(lock_acquire test > /dev/null 2>&1; echo $?)"
+# Keep the owner alive in this shell, not an already-exited substitution.
+lock_acquire test > /dev/null 2>&1
+first=$?
+check "первый берёт замок" "0" "$first"
 check "каталог появился" "yes" \
     "$([ -d "$(lock_dir test)" ] && echo yes || echo no)"
 

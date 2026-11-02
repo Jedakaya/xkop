@@ -222,9 +222,8 @@ config_validate() {
 
     command -v "$engine" > /dev/null 2>&1 || return 2
 
-    # The format is stated outright rather than left to the file name: the
-    # engine guesses it from the extension, and a candidate written as
-    # "config.json.new" is refused before it is even parsed.
+    # Keep both an explicit format and a .json suffix: current Xray rejects
+    # unknown extensions even when -format json is supplied.
     "$engine" run -test -format json -c "$file" > /dev/null 2>&1
 }
 
@@ -245,9 +244,21 @@ config_generated_ok() {
 }
 
 config_generate() {
+    # Code 3 means another writer is active; reconciliation must retry.
+    local result
+    if command -v lock_acquire > /dev/null 2>&1; then
+        lock_acquire config || return 3
+        if config_generate_locked; then result=0; else result=$?; fi
+        lock_release config
+        return "$result"
+    fi
+    config_generate_locked
+}
+
+config_generate_locked() {
     local new old
     mkdir -p "$XKOP_RUN_DIR" "$(dirname "$XKOP_CONFIG_PATH")"
-    new="$XKOP_RUN_DIR/config.json.new"
+    new="$XKOP_RUN_DIR/config.new.json"
 
     if ! config_input_json | jq -f "$XKOP_LIB_DIR/config.jq" > "$new" 2> "$XKOP_RUN_DIR/config.err"; then
         log_error "конфигурация не собралась: $(head -n 1 "$XKOP_RUN_DIR/config.err" 2> /dev/null)"
@@ -269,7 +280,14 @@ config_generate() {
 
     old="$XKOP_CONFIG_PATH.previous"
     [ -f "$XKOP_CONFIG_PATH" ] && cp "$XKOP_CONFIG_PATH" "$old"
-    cp "$new" "$XKOP_CONFIG_PATH.tmp" && mv "$XKOP_CONFIG_PATH.tmp" "$XKOP_CONFIG_PATH"
+    # Keep a reload requirement across failed nft/DNS repairs. An unchanged
+    # file on the next pass does not mean the running engine has loaded it.
+    if ! : > "$XKOP_RUN_DIR/config-reload.pending" \
+        || ! cp "$new" "$XKOP_CONFIG_PATH.tmp" \
+        || ! mv "$XKOP_CONFIG_PATH.tmp" "$XKOP_CONFIG_PATH"; then
+        log_error "не удалось установить проверенную конфигурацию"
+        return 1
+    fi
     log_info "конфигурация обновлена"
     return 0
 }

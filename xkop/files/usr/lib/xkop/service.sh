@@ -284,33 +284,9 @@ service_check_requirements() {
     return 0
 }
 
-# Обновление списков в фоне, после того как роутер уже поднялся.
-#
-# Перезапуск делается только когда состав подсетей изменился: обновление ради
-# обновления рвало бы соединения на ровном месте раз в час.
-lists_refresh_background() {
-    local pidfile="$XKOP_RUN_DIR/lists-refresh.pid" pid
-
-    pid=$(cat "$pidfile" 2> /dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null; then
-        return 0
-    fi
-
-    (
-        trap 'rm -f "$pidfile"' EXIT INT TERM
-        sleep 20
-        if lists_subnets_update; then
-            log_info "состав подсетей изменился, пересобираю конфигурацию"
-            config_generate > /dev/null 2>&1 && /etc/init.d/xkop restart > /dev/null 2>&1
-        fi
-    ) &
-
-    echo $! > "$pidfile"
-    return 0
-}
-
 service_prepare() {
     mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" "$XKOP_CACHE_DIR"
+    rm -f "$XKOP_RUN_DIR/service-stopped"
 
     # Задачи по расписанию — первыми: это единственный путь роутера обратно
     # в рабочее состояние без человека, и отказ ниже не должен его отнять.
@@ -319,25 +295,19 @@ service_prepare() {
     service_check_requirements || return 1
     service_br_netfilter_disable
     service_sync_time
+    if service_wan_ready; then
+        printf '1' > "$XKOP_RUN_DIR/starting-wan.ready"
+    else
+        printf '0' > "$XKOP_RUN_DIR/starting-wan.ready"
+        : > "$XKOP_RUN_DIR/wan-reprobe.pending"
+    fi
 
     # Списки нужны движку в момент загрузки конфигурации: правило geosite он
     # разворачивает сразу, и без файла отвергает конфигурацию целиком.
-    lists_present || lists_update
+    lists_present || log_warn "кэша списков пока нет, загрузка будет повторена после подъёма WAN"
 
-    # Списки берутся из кэша, сеть здесь не спрашивается вовсе.
-    #
-    # Загрузка подсетей стояла тут же и делала старт бесконечным: у категории
-    # своя минута ожидания, и на роутере, которому как раз и нужен туннель,
-    # они складываются в минуты. Роутер обязан подниматься на том, что уже
-    # лежит на диске — это записанный инвариант, и я его нарушил.
-    #
-    # Обновление уходит в фон и само перезапускает службу, только если что-то
-    # действительно изменилось.
-    lists_refresh_background
-
-    userlist_update_all > /dev/null 2>&1
-
-    subscription_update_all
+    # Boot is local-only. A late PPPoE connection must not hold the engine
+    # behind subscription/list downloads. Reconcile after starting the cache.
 
     config_generate
     if config_generated_ok "$?"; then
@@ -391,6 +361,142 @@ service_prepare() {
 XKOP_RECOVERY_PID="/var/run/xkop-recovery.pid"
 XKOP_RECOVERY_ATTEMPTS="$XKOP_STATE_DIR/recovery-attempts"
 
+service_wan_ready() {
+    local interfaces iface
+    interfaces=$(config_uci_get settings wan_interface)
+    [ -n "$interfaces" ] || interfaces=wan
+    for iface in $interfaces; do
+        if ubus call "network.interface.$iface" status 2> /dev/null \
+            | jq -e '.up == true' > /dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+service_proxy_expected() {
+    local id ids
+    ids=$(config_bindings_json | jq -r '.[]
+        | select(.channel.type != "direct" and .channel.type != "block")
+        | .channel.subscription[]?')
+    for id in $ids; do
+        [ "$(config_uci_get "$id" enabled)" = 0 ] && continue
+        [ -n "$(config_uci_get "$id" url)" ] && return 0
+    done
+    return 1
+}
+
+service_proxy_ready() {
+    service_proxy_expected || return 0
+    jq -e '(.routing.balancers | length) > 0
+        and (.burstObservatory.subjectSelector | length) > 0' "$XKOP_CONFIG_PATH" > /dev/null 2>&1
+}
+
+# Called under the work lock. Return 2 to restart outside the lock, 1 to
+# retry, 0 only when the installed configuration and local routing are ready.
+service_reconcile() {
+    local owner="${1:-}" generated changed=0
+    service_wan_ready || return 1
+    [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
+    # Restore local delivery before any network operation can block on it.
+    if nft_present; then nft_routing_rule || return 1; else nft_apply || return 1; fi
+    # A startup hook may have deferred confirmation while another writer was
+    # active. Confirm the loaded snapshot before deciding on another restart.
+    if engine_answers; then service_finish_start || true; fi
+    # Restore a usable cached tunnel as soon as PPPoE becomes ready. A slow
+    # subscription endpoint must not delay refreshing pre-WAN DNS/probe state.
+    if [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] && service_proxy_ready; then
+        if nft_present; then nft_routing_rule || return 1; else nft_apply || return 1; fi
+        return 2
+    fi
+    lists_present || lists_update
+    subscription_update_all startup
+
+    # Stop may have happened while curl was waiting. Never apply or restart
+    # on behalf of a cancelled worker, even after another start cleared stop.
+    [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
+    if [ -n "$owner" ] && [ "$(cat "$XKOP_RECOVERY_PID" 2> /dev/null)" != "$owner" ]; then
+        return 1
+    fi
+    if config_generate; then generated=0; changed=1; else generated=$?; fi
+    [ "$generated" != 3 ] || return 1
+    if ! config_generated_ok "$generated"; then
+        # A broken new candidate must not prevent the last valid file starting.
+        [ -s "$XKOP_CONFIG_PATH" ] && config_validate "$XKOP_CONFIG_PATH" || return 1
+    fi
+    [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || changed=1
+    if [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] && service_proxy_ready; then changed=1; fi
+    if [ "$changed" = 1 ] || ! nft_present; then
+        nft_apply || return 1
+    else
+        nft_routing_rule || return 1
+    fi
+    if [ "$(config_uci_get settings dns_mode)" = fakeip ]; then
+        dnsmasq_configure || return 1
+    fi
+    # A new cache/config must be loaded even when old metrics answer.
+    if [ "$changed" = 1 ] || ! engine_answers; then return 2; fi
+    service_proxy_ready || return 1
+
+    # Optional source refresh must not hold a newly obtained subscription
+    # behind slow list downloads. First make the core route usable, then
+    # refresh cached lists once per boot and apply them if they changed.
+    if [ ! -f "$XKOP_RUN_DIR/startup-lists-checked" ]; then
+        userlist_update_all > /dev/null 2>&1
+        lists_subnets_update > /dev/null 2>&1
+        [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
+        if [ -n "$owner" ] && [ "$(cat "$XKOP_RECOVERY_PID" 2>/dev/null)" != "$owner" ]; then return 1; fi
+        : > "$XKOP_RUN_DIR/startup-lists-checked"
+        if config_generate; then
+            nft_apply || return 1
+            return 2
+        else
+            generated=$?
+            config_generated_ok "$generated" || return 1
+        fi
+    fi
+    return 0
+}
+
+service_finish_start() {
+    local result
+    lock_acquire config || return 1
+    if service_finish_start_locked; then result=0; else result=$?; fi
+    lock_release config
+    return "$result"
+}
+
+service_finish_start_locked() {
+    local previous current
+    [ -s "$XKOP_RUN_DIR/starting-config.json" ] || return 0
+    previous=$(cat "$XKOP_RUN_DIR/starting-engine.pid" 2>/dev/null)
+    current=$(ubus call service list '{"name":"xkop"}' 2>/dev/null | jq -r '.xkop.instances.engine.pid // 0')
+    [ -n "$current" ] && [ "$current" != 0 ] || return 1
+    if [ "$current" = "$previous" ] \
+        && { [ -f "$XKOP_RUN_DIR/config-reload.pending" ] || [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ]; }; then return 1; fi
+    if cmp -s "$XKOP_RUN_DIR/starting-config.json" "$XKOP_CONFIG_PATH"; then
+        rm -f "$XKOP_RUN_DIR/config-reload.pending"
+        if [ "$(cat "$XKOP_RUN_DIR/starting-wan.ready" 2>/dev/null)" = 1 ]; then
+            rm -f "$XKOP_RUN_DIR/wan-reprobe.pending"
+        fi
+    fi
+    return 0
+}
+
+recovery_wait() {
+    local seconds="$1" elapsed=0
+    while [ "$elapsed" -lt "$seconds" ]; do
+        [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
+        if [ -f "$XKOP_RUN_DIR/recovery.wake" ]; then
+            rm -f "$XKOP_RUN_DIR/recovery.wake"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 0
+}
+
 recovery_running() {
     local pid
     [ -f "$XKOP_RECOVERY_PID" ] || return 1
@@ -403,14 +509,19 @@ recovery_stop() {
     [ -f "$XKOP_RECOVERY_PID" ] || return 0
     pid=$(cat "$XKOP_RECOVERY_PID" 2> /dev/null)
     [ -n "$pid" ] && kill "$pid" 2> /dev/null
-    rm -f "$XKOP_RECOVERY_PID"
+    rm -f "$XKOP_RECOVERY_PID" "$XKOP_RUN_DIR/recovery.wake"
 }
 
 recovery_start() {
+    lock_run recovery recovery_start_locked
+}
+
+recovery_start_locked() {
     local attempts wait
+    [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 0
 
     if recovery_running; then
-        log_info "фоновое восстановление уже работает"
+        : > "$XKOP_RUN_DIR/recovery.wake"
         return 0
     fi
     rm -f "$XKOP_RECOVERY_PID"
@@ -422,63 +533,87 @@ recovery_start() {
     mkdir -p "$XKOP_STATE_DIR"
     echo "$((attempts + 1))" > "$XKOP_RECOVERY_ATTEMPTS"
 
-    wait=10
+    wait=0
     while [ "$attempts" -gt 0 ] && [ "$wait" -lt 300 ]; do
-        wait=$((wait * 2))
+        if [ "$wait" = 0 ]; then wait=5; else wait=$((wait * 2)); fi
         attempts=$((attempts - 1))
     done
     [ "$wait" -gt 300 ] && wait=300
 
     (
-        trap 'rm -f "$XKOP_RECOVERY_PID"' EXIT INT TERM
-
-        sleep "$wait"
+        # $$ stays the parent PID in ash subshells; read our actual PID using
+        # a shell builtin so a cancelled worker cannot remove its successor.
+        read -r worker_pid _ < /proc/self/stat
+        held=0
+        trap 'if [ "$held" = 1 ]; then lock_release work; fi;
+            if [ "$(cat "$XKOP_RECOVERY_PID" 2>/dev/null)" = "$worker_pid" ]; then
+                rm -f "$XKOP_RECOVERY_PID"; fi' EXIT
+        trap 'exit 0' INT TERM
+        recovery_wait "$wait" || exit 0
         delay=30
 
         while true; do
-            # Признак успеха — появившийся пул, а не код возврата обновления:
-            # обновление обходит подписки по их расписанию и завершается
-            # нулём, даже когда ни одна не ответила. Условие на нём было бы
-            # пустым, и восстановление вырождалось бы в один перезапуск.
-            subscription_update_all force > /dev/null 2>&1
-            pool=$(subscription_pool_all 2> /dev/null | jq 'length' 2> /dev/null)
-            case "$pool" in
-                '' | *[!0-9]*) pool=0 ;;
-            esac
-
-            if [ "$pool" -gt 0 ]; then
-                if engine_answers; then
-                    log_info "восстановление удалось, движок отвечает"
-                    rm -f "$XKOP_RECOVERY_PID" "$XKOP_RECOVERY_ATTEMPTS"
-                    exit 0
-                fi
-
-                # Узлы приехали — их надо донести до движка. Обновление само
-                # ничего не перезапускает, и без этого пул есть, а движок
-                # работает на прежней, пустой конфигурации.
-                log_info "подписки приехали, перезапускаю службу с новой конфигурацией"
-                config_generate > /dev/null 2>&1
+            [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || exit 0
+            # The parent stores $! just after forking us.
+            if [ ! -f "$XKOP_RECOVERY_PID" ]; then sleep 1; fi
+            [ "$(cat "$XKOP_RECOVERY_PID" 2>/dev/null)" = "$worker_pid" ] || exit 0
+            if lock_acquire work; then
+                held=1
+                if service_reconcile "$worker_pid"; then result=0; else result=$?; fi
+                lock_release work
+                held=0
+            else
+                recovery_wait 1 || exit 0
+                continue
+            fi
+            [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || exit 0
+            [ "$(cat "$XKOP_RECOVERY_PID" 2>/dev/null)" = "$worker_pid" ] || exit 0
+            if [ "$result" = 0 ]; then
+                log_info "послестартовая сверка завершена: конфигурация и маршрутизация готовы"
+                rm -f "$XKOP_RECOVERY_ATTEMPTS"
+                exit 0
+            fi
+            if [ "$result" = 2 ]; then
+                log_info "применяю подготовленную конфигурацию после подъёма WAN"
                 rm -f "$XKOP_RECOVERY_PID"
-                /etc/init.d/xkop restart > /dev/null 2>&1
+                if service_restart_engine; then
+                    # A successful init command does not guarantee that its
+                    # started hook ran. Verify a successor or the new engine.
+                    checked=0
+                    while [ "$checked" -lt 20 ]; do
+                        [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || exit 0
+                        recovery_running && exit 0
+                        if engine_answers && service_finish_start; then break; fi
+                        sleep 1
+                        checked=$((checked + 1))
+                    done
+                else
+                    log_error "перезапуск не удался, фоновое восстановление будет повторено"
+                fi
+                recovery_start
                 exit 0
             fi
 
-            log_warn "подписки ещё недоступны, повтор через ${delay} с"
-            sleep "$delay"
+            log_warn "WAN или маршрутизация ещё не готовы, повтор через ${delay} с"
+            recovery_wait "$delay" || exit 0
             [ "$delay" -lt 300 ] && delay=$((delay * 2))
             [ "$delay" -gt 300 ] && delay=300
         done
     ) &
 
     echo $! > "$XKOP_RECOVERY_PID"
-    log_warn "взведено фоновое восстановление, первая попытка через ${wait} с"
+    log_info "запущена фоновая сверка зависимостей, первая попытка через ${wait} с"
+}
+
+service_restart_engine() {
+    /etc/init.d/xkop restart > /dev/null 2>&1
 }
 
 # Вызывается из start_service_done: старт вернул ноль и движок поднялся —
 # разные утверждения, и различать их тут и есть работа.
 service_started_check() {
     if engine_wait 20; then
-        rm -f "$XKOP_RECOVERY_ATTEMPTS"
+        service_finish_start || log_info "подтверждение конфигурации отложено до фоновой сверки"
 
         # Узел закрепляется сразу, а не через пять минут по расписанию.
         #
@@ -495,7 +630,7 @@ service_started_check() {
         (lock_run work nodes_keep > /dev/null 2>&1 &)
 
         # И то, что не скачалось, пока движка ещё не было.
-        (subscription_retry_failed > /dev/null 2>&1 &)
+        recovery_start
         return 0
     fi
 
@@ -517,6 +652,10 @@ service_started_check() {
 # совпадающем состоянии ничего не делает — то есть мягкая остановка ничего
 # не оставляет в неопределённом виде.
 service_teardown() {
+    mkdir -p "$XKOP_RUN_DIR"
+    # Internal restart still wants the service running. Only an explicit stop
+    # cancels pending recovery, including a failed restart's retry.
+    if [ "${XKOP_RESTARTING:-0}" != 1 ]; then : > "$XKOP_RUN_DIR/service-stopped"; fi
     recovery_stop
 
     if [ "${XKOP_RESTARTING:-0}" = "1" ]; then
@@ -541,33 +680,9 @@ service_teardown() {
 # Ничего не перезапускается без нужды. Работающий движок трогать на каждое
 # мигание интерфейса — это способ уронить то, что работало.
 service_on_wan_up() {
-    local restart=0
-
-    if ! nft_present; then
-        log_info "правила nft отсутствуют, применяю заново"
-        # Отказ здесь означает роутер без правил и весь трафик напрямую.
-        # Проглатывать его через "|| true" — значит промолчать ровно там,
-        # где молчать нельзя: снаружи всё выглядит исправным.
-        nft_apply || log_error "правила nft не применились при подъёме интерфейса, трафик идёт напрямую"
-    fi
-
-    lists_present || lists_update
-
-    # Спрашиваются только те подписки, которым пора, плюс те, у кого пусто:
-    # именно они и есть причина, по которой мы сюда пришли.
-    subscription_update_all
-
-    if [ "$(subscription_pool_all | jq 'length' 2> /dev/null)" != "0" ]; then
-        # Только код 0 — «поставлена новая». Двойка означает «прежняя годится»,
-        # и перезапускаться на ней значит рвать соединения ни за чем.
-        config_generate
-        [ "$?" -eq 0 ] && restart=1
-    fi
-
-    if [ "$restart" -eq 1 ]; then
-        log_info "после подъёма WAN появились узлы, перезапускаю движок"
-        /etc/init.d/xkop restart > /dev/null 2>&1 &
-    fi
+    [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 0
+    service_wan_ready || return 0
+    recovery_start
 }
 
 # One door for the interface. LuCI could call /etc/init.d/xkop itself, but then
@@ -610,7 +725,7 @@ service_control() {
 # и повторять сборку пула и запрос к эндпоинту незачем.
 service_status_json() {
     local nodes="${1:-}" answering_in="${2:-}"
-    local enabled=0 running=0 answering=0
+    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0
 
     [ -x /etc/rc.d/S99xkop ] && enabled=1
     engine_process_running && running=1
@@ -625,10 +740,17 @@ service_status_json() {
         nodes=$(subscription_pool_all | jq 'length' 2> /dev/null)
     fi
     [ -n "$nodes" ] || nodes=0
+    service_proxy_ready && proxy_ready=1
+    nft_routing_ready && routing_ready=1
+    service_wan_ready && wan_ready=1
+    [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || pending=1
+    [ ! -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] || pending=1
 
     jq -nc \
         --argjson enabled "$enabled" --argjson running "$running" \
         --argjson answering "$answering" --argjson nodes "$nodes" \
+        --argjson proxy_ready "$proxy_ready" --argjson routing_ready "$routing_ready" --argjson wan_ready "$wan_ready" \
+        --argjson pending "$pending" \
         --argjson config "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
         --argjson rules "$(nft_present && echo true || echo false)" \
         '{
@@ -638,8 +760,15 @@ service_status_json() {
             config_present: $config,
             nft_rules: $rules,
             nodes: $nodes,
+            routing_ready: ($routing_ready == 1 and $proxy_ready == 1 and $pending == 0),
+            config_pending: ($pending == 1),
+            wan_ready: ($wan_ready == 1),
             state: (
-                if ($running == 1) and ($answering == 1) and $rules then "работает"
+                if ($running == 1) and ($answering == 1) and ($wan_ready == 0) then "ожидает WAN"
+                elif ($running == 1) and ($answering == 1) and ($proxy_ready == 0) then "движок запущен, ожидает серверы"
+                elif ($running == 1) and ($answering == 1) and ($pending == 1) then "применяется конфигурация"
+                elif ($running == 1) and ($answering == 1) and $rules and ($routing_ready == 1) then "работает"
+                elif ($running == 1) and ($answering == 1) and $rules then "не готовы правила маршрутизации"
                 elif ($running == 1) and ($answering == 0) then "движок запущен, но не отвечает"
                 elif ($running == 1) then "движок работает, правила не применены"
                 else "остановлен"

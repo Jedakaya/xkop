@@ -206,13 +206,23 @@ EOF
 # that is a routing decision, not a firewall one: a rule sends everything with
 # our mark to a table whose only entry says "this is for us".
 nft_routing_rule() {
+    local mark
+    mark=$(printf '0x%x' "$XKOP_NFT_MARK")
     if ! ip route list table "$XKOP_ROUTE_TABLE" 2> /dev/null | grep -q 'local default dev lo'; then
-        ip route add local 0.0.0.0/0 dev lo table "$XKOP_ROUTE_TABLE" 2> /dev/null
+        ip route add local 0.0.0.0/0 dev lo table "$XKOP_ROUTE_TABLE" 2> /dev/null || return 1
     fi
 
-    if ! ip rule list | grep -q "fwmark $XKOP_NFT_MARK/$XKOP_NFT_MARK lookup $XKOP_ROUTE_TABLE"; then
-        ip -4 rule add fwmark "$XKOP_NFT_MARK/$XKOP_NFT_MARK" table "$XKOP_ROUTE_TABLE" priority 106 2> /dev/null
+    if ! ip -4 rule list | grep -q "fwmark $mark/$mark lookup $XKOP_ROUTE_TABLE"; then
+        ip -4 rule add fwmark "$XKOP_NFT_MARK/$XKOP_NFT_MARK" table "$XKOP_ROUTE_TABLE" priority 106 2> /dev/null || return 1
     fi
+    nft_routing_ready
+}
+
+nft_routing_ready() {
+    local mark
+    mark=$(printf '0x%x' "$XKOP_NFT_MARK")
+    ip route list table "$XKOP_ROUTE_TABLE" 2> /dev/null | grep -q 'local default dev lo' \
+        && ip -4 rule list | grep -q "fwmark $mark/$mark lookup $XKOP_ROUTE_TABLE"
 }
 
 nft_routing_rule_remove() {
@@ -356,7 +366,7 @@ nft_apply() {
         if [ -n "$routed" ]; then
             log_warn "повторяю без выборочного перехвата"
             if nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" ""                 | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
-                nft_routing_rule
+                nft_routing_rule || return 1
                 log_info "правила nft применены без выборочного перехвата"
                 return 0
             fi
@@ -366,7 +376,7 @@ nft_apply() {
         return 1
     fi
 
-    nft_routing_rule
+    nft_routing_rule || return 1
     log_info "правила nft применены, источники: $interfaces"
     return 0
 }

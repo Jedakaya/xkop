@@ -47,6 +47,7 @@ PINNED=""
 
 # shellcheck source=/dev/null
 . "$ROOT/xkop/files/usr/lib/xkop/nodes.sh"
+nodes_measure_rtt() { : > "$work/rtt-called"; }
 
 # Заглушки ставятся ПОСЛЕ подключения: определённые до, они были бы перекрыты
 # настоящими из самого модуля, и проверка молча ушла бы разговаривать
@@ -77,6 +78,7 @@ STATS='{"observatory":{"nodes":[
     {"tag":"DE","state":"alive","delay_ms":380},
     {"tag":"FI","state":"alive","delay_ms":330}]}}'
 out=$(nodes_keep)
+check "восстановление маршрута не ждёт TCP-замеров" "no" "$([ -f "$work/rtt-called" ] && echo yes || echo no)"
 check "выигрыш меньше допуска — держимся" "kept" "$(printf '%s' "$out" | "$JQ" -r '.result')"
 check "держимся именно текущего" "DE" "$(printf '%s' "$out" | "$JQ" -r '.selected')"
 check "и закрепляем его, чтобы не выбирался заново" "DE" "$(pinned)"

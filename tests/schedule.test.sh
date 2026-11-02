@@ -88,6 +88,13 @@ printf '{"subscription":"main","state":"ready","updated_at":%s,"servers":5}' "$(
     > "$XKOP_CACHE_DIR/main/meta.json"
 check "по истечении интервала — пора" "yes" "$(subscription_due main && echo yes || echo no)"
 
+# A failed startup fetch must be retried even when the old cache is fresh.
+printf '{"state":"stale","reason":"download_failed","updated_at":%s,"servers":2}' "$now" > "$XKOP_CACHE_DIR/main/meta.json"
+subscription_ids() { echo main; }
+subscription_update() { echo "$1" > "$XKOP_CACHE_DIR/retried"; }
+subscription_update_all startup
+check "послестартовая сверка повторяет отказ независимо от срока" main "$(cat "$XKOP_CACHE_DIR/retried" 2>/dev/null)"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

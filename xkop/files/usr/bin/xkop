@@ -145,10 +145,13 @@ cmd_subscriptions() {
 # когда конфигурация действительно изменилась (config_generate вернул 0)
 # и служба запущена: остановленную обновление не поднимает.
 subscription_apply() {
-    config_generate > /dev/null 2>&1 || return 0
-    engine_process_running || return 0
-    log_info "подписка изменила конфигурацию, перезапускаю движок"
-    /etc/init.d/xkop restart > /dev/null 2>&1
+    if engine_process_running; then
+        # Coalesce with startup/WAN reconciliation, including a busy writer.
+        recovery_start
+    else
+        config_generate > /dev/null 2>&1 || true
+    fi
+    return 0
 }
 
 # Человек, нажавший «обновить», ждёт запроса к панели, а не рассказа
@@ -296,6 +299,8 @@ main() {
             # Под замком: рядом может идти canary с перезапуском службы,
             # а закрепление узла читает состояние движка.
             lock_run work nodes_keep
+            # TCP timing is diagnostic, not a prerequisite for routing.
+            lock_run rtt nodes_measure_rtt
             ;;
         canary)
             # Если выученное изменилось, движок держит конфигурацию, которая

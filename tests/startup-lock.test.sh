@@ -5,10 +5,13 @@ ROOT=${ROOT:-$(dirname "$0")/..}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 XKOP_STATE_DIR="$work"
+XKOP_RUN_DIR="$work"
 . "$ROOT/xkop/files/usr/lib/xkop/service.sh"
 XKOP_RECOVERY_ATTEMPTS="$work/attempts"
 engine_wait() { return 0; }
+service_finish_start() { return 0; }
 subscription_retry_failed() { :; }
+recovery_start() { :; }
 nodes_keep() { echo unsafe > "$work/result"; }
 lock_run() { echo locked > "$work/result"; }
 service_started_check

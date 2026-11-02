@@ -24,18 +24,28 @@ lock_dir() {
 }
 
 lock_acquire() {
-    local name="${1:-work}" dir pid
+    local name="${1:-work}" dir pid owner="$$"
     dir=$(lock_dir "$name")
+    # ash keeps $$ unchanged in subshells; the starter may already be gone
+    # while its worker is holding the lock. Record the process doing the work.
+    if [ -r /proc/self/stat ]; then
+        read -r owner _ < /proc/self/stat || owner="$$"
+    fi
 
     mkdir -p "$XKOP_RUN_DIR" 2> /dev/null
 
     if mkdir "$dir" 2> /dev/null; then
-        printf '%s' "$$" > "$dir/pid" 2> /dev/null
+        printf '%s' "$owner" > "$dir/pid" 2> /dev/null
         return 0
     fi
 
     # Замок занят. Живым ли?
     pid=$(cat "$dir/pid" 2> /dev/null)
+    if [ -z "$pid" ]; then
+        # Another owner can be between mkdir and writing its PID.
+        sleep 1
+        pid=$(cat "$dir/pid" 2> /dev/null)
+    fi
     if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
         return 1
     fi
@@ -43,7 +53,7 @@ lock_acquire() {
     log_warn "снимаю брошенный замок $name"
     rm -rf "$dir" 2> /dev/null
     mkdir "$dir" 2> /dev/null || return 1
-    printf '%s' "$$" > "$dir/pid" 2> /dev/null
+    printf '%s' "$owner" > "$dir/pid" 2> /dev/null
     return 0
 }
 

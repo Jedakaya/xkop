@@ -242,11 +242,23 @@ nodes_select() {
 # Persist the same routing that is applied live: a procd respawn must not
 # resurrect the previous selection. Replacing routing preserves connections.
 # On an API error restore both copies; a timeout may have applied the request.
-nodes_apply_selection() (
+nodes_apply_selection() {
+    local result
+    if command -v lock_acquire > /dev/null 2>&1; then
+        lock_acquire config || return 1
+        if nodes_apply_selection_locked "$@"; then result=0; else result=$?; fi
+        lock_release config
+        return "$result"
+    fi
+    nodes_apply_selection_locked "$@"
+}
+
+nodes_apply_selection_locked() (
     umask 077
+    [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || return 1
     local tag="$1" candidate backup generated marker marker_tmp previous_pin
     marker=$(nodes_manual_marker)
-    candidate="$XKOP_CONFIG_PATH.select-$$"
+    candidate="$XKOP_CONFIG_PATH.select-$$.json"
     backup="$XKOP_RUN_DIR/selection-$$.previous.json"
     generated="$XKOP_RUN_DIR/selection-$$.generated.json"
     marker_tmp="$marker.select-$$"
@@ -380,9 +392,6 @@ nodes_keep() {
         rm -f "$(nodes_manual_marker)" 2> /dev/null
         log_warn "закреплённый вручную узел $chosen пропал из пула, возвращаю автовыбор"
     fi
-
-    # Restore the choice before doing any potentially slow network probes.
-    nodes_measure_rtt
 
     # Чужое закрепление - решение человека, и оно не обсуждается.
     if [ -n "$override" ] && [ "$override" != "$mine" ]; then

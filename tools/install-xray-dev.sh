@@ -17,15 +17,13 @@
 # Usage (on the router):
 #   sh install-xray-dev.sh                 в /usr/bin/xray
 #   XRAY_TARGET=/tmp/xray sh install-xray-dev.sh    без единого байта на флэш
-#   XRAY_VERSION=v26.7.28 sh install-xray-dev.sh
+#   XRAY_VERSION=v26.10.31 sh install-xray-dev.sh
 #   XRAY_ASSET=Xray-linux-mips32le.zip sh install-xray-dev.sh
 
 set -eu
 
-# Newest release XTLS does not mark as prerelease. Everything after it is
-# published as prerelease, so "latest" from the API stops here - and taking a
-# prerelease blindly is exactly what docs/install.md forbids.
-XRAY_VERSION=${XRAY_VERSION:-v26.7.28}
+# Pinned to the engine version tested and shipped with the package.
+XRAY_VERSION=${XRAY_VERSION:-v26.10.31}
 XRAY_TARGET=${XRAY_TARGET:-/usr/bin/xray}
 WORK=/tmp/xkop-xray-install
 

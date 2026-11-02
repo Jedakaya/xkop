@@ -615,7 +615,8 @@ subscription_update_all() {
     local id force="${1:-}"
 
     for id in $(subscription_ids); do
-        if [ "$force" = "force" ] || subscription_due "$id"; then
+        if [ "$force" = "force" ] || subscription_due "$id" \
+            || { [ "$force" = "startup" ] && [ "$(subscription_meta "$id" | jq -r '.reason // ""')" = "download_failed" ]; }; then
             subscription_update "$id"
         fi
     done

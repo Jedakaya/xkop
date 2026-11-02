@@ -38,6 +38,15 @@ start_service() {
         return 0
     }
 
+    # Snapshot what this start will load. A background repair may install a
+    # newer file before the new process answers; that reload must stay pending.
+    (
+        umask 077
+        cp "$CONFIG" /tmp/xkop/starting-config.json
+        ubus call service list '{"name":"xkop"}' 2>/dev/null \
+            | jq -r '.xkop.instances.engine.pid // 0' > /tmp/xkop/starting-engine.pid
+    )
+
     # procd owns the engine process: it restarts it if it dies, and it is the
     # one place where that decision belongs.
     procd_open_instance engine
@@ -137,7 +146,8 @@ service_triggers() {
 
     local iface
     for iface in $interfaces; do
-        procd_add_interface_trigger "interface.*.up" "$iface" /usr/bin/xkop wan_up
+        procd_add_interface_trigger "interface.up" "$iface" /usr/bin/xkop wan_up
+        procd_add_interface_trigger "interface.update" "$iface" /usr/bin/xkop wan_up
     done
     procd_close_trigger
 }

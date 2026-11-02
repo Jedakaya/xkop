@@ -101,8 +101,12 @@ jobs:
       # представления о его схеме. Версия та же, что ставит установщик.
       - name: Fetch engine
         run: |
+          VERSION=$(sed -n 's/^PKG_VERSION:=//p' xray-xkop/Makefile)
+          HASH=$(sed -n 's/^XRAY_HASH_Xray-linux-64:=//p' xray-xkop/Makefile)
+          [ -n "$VERSION" ] && [ -n "$HASH" ]
           curl -fsSL -o /tmp/xray.zip \
-            https://github.com/XTLS/Xray-core/releases/download/v26.9.9/Xray-linux-64.zip
+            "https://github.com/XTLS/Xray-core/releases/download/v$VERSION/Xray-linux-64.zip"
+          echo "$HASH  /tmp/xray.zip" | sha256sum -c -
           # geosite.dat идёт следом за бинарником: правила вида "geosite:xxx"
           # движок разворачивает при загрузке конфигурации, и без файла он
           # отвергает её целиком. На роутере действует то же требование.
