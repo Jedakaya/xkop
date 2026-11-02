@@ -19,7 +19,9 @@ mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR"
 . "$XKOP_LIB_DIR/nodes.sh"
 log_info() { :; }; log_warn() { :; }; log_error() { :; }
 config_input_json() {
-    jq --arg pin "${1-}" '. + {manual_pin: $pin}' "$ROOT/tests/fixtures/config/with-pool.json"
+    jq --arg pin "${1-}" --arg log "$work/access.log" \
+        '. + {manual_pin: $pin} | .settings.access_log_path = $log' \
+        "$ROOT/tests/fixtures/config/with-pool.json"
 }
 nodes_api() { return 0; }
 failed=0
