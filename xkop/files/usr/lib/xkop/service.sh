@@ -779,7 +779,9 @@ service_status_json() {
     service_wan_ready && wan_ready=1
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || pending=1
     [ ! -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] || pending=1
-    if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then bootstrap=1; pending=1; fi
+    if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] && [ ! -f "$XKOP_RUN_DIR/service-stopped" ]; then
+        bootstrap=1; pending=1
+    fi
 
     jq -nc \
         --argjson enabled "$enabled" --argjson running "$running" \

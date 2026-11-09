@@ -44,3 +44,10 @@ subscription_pool_all() { echo '[]'; }
 status=$(service_status_json)
 printf '%s' "$status" | jq -e '.lists_pending==true and .routing_ready==false and .state!="работает"' >/dev/null || exit 1
 echo 'ok   bootstrap is shown as waiting for lists, never as working routing'
+: > "$XKOP_RUN_DIR/service-stopped"
+engine_process_running() { return 1; }; engine_answers() { return 1; }
+status=$(service_status_json)
+printf '%s' "$status" | jq -e '.lists_pending==false and .state=="остановлен"' >/dev/null || {
+    echo 'FAIL explicitly stopped bootstrap is still shown as loading'; exit 1;
+}
+echo 'ok   an explicit stop is shown as stopped even with cached bootstrap state'
