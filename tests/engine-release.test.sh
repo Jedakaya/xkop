@@ -18,7 +18,7 @@ jq '.[0].assets |= map(select(.name | endswith(".apk")))' "$work/full.json" > "$
 check apk-only ''
 jq '.[0].assets |= .[1:]' "$work/full.json" > "$work/missing-arch.json"
 check missing-arch ''
-jq '.[0].assets[0].name |= sub("26.10.31";"26.9.9")' "$work/full.json" > "$work/mixed-version.json"
+jq '.[0].assets[0].name = "xray-xkop-26.9.9-r1-aarch64_cortex-a53.apk"' "$work/full.json" > "$work/mixed-version.json"
 check mixed-version ''
 jq '.[0].draft = true' "$work/full.json" > "$work/draft.json"
 check draft ''
