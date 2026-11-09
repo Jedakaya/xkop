@@ -684,7 +684,7 @@ installed_version() {
             /^xkop-[0-9]/ { v = $1; sub("^xkop-", "", v); sub("-r[0-9]+$", "", v); print v; exit }'
     else
         opkg list-installed 2> /dev/null | awk '
-            $1 == "xkop" { v = $3; sub("-r[0-9]+$", "", v); print v; exit }'
+            $1 == "xkop" { v = $3; sub("-r?[0-9]+$", "", v); print v; exit }'
     fi
 }
 
@@ -730,7 +730,7 @@ engine_pkg_version() {
 # Версии сравниваются без номера сборки: "26.7.28-r1" и "26.7.28" — про один
 # и тот же движок.
 engine_version_core() {
-    printf '%s' "${1%%-r[0-9]*}"
+    printf '%s' "$1" | sed 's/-r\{0,1\}[0-9][0-9]*$//'
 }
 
 # Версия из имени файла в релизе: xray-xkop-26.7.28-r1-<арх>.<формат>.

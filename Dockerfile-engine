@@ -7,6 +7,7 @@ ARG SDK_IMAGE=ghcr.io/jedakaya/xkop-sdk-apk:25.12.0
 FROM ${SDK_IMAGE} AS build
 
 ARG XKOP_TARGET_ARCH=x86_64
+ARG XKOP_PACKAGE_TYPE=apk
 ENV XKOP_TARGET_ARCH=${XKOP_TARGET_ARCH}
 
 WORKDIR /builder
@@ -22,10 +23,16 @@ RUN set -e; \
     if ! make package/xray-xkop/compile -j1 V=s XKOP_TARGET_ARCH=${XKOP_TARGET_ARCH} > /tmp/build.log 2>&1; then \
         tail -n 80 /tmp/build.log; exit 1; \
     fi; \
-    if ! grep -q "arch:${XKOP_TARGET_ARCH}" /tmp/build.log; then \
+    if [ "${XKOP_PACKAGE_TYPE}" = apk ] && ! grep -q "arch:${XKOP_TARGET_ARCH}" /tmp/build.log; then \
         echo "PKGARCH не доехал до пакета: ожидалась ${XKOP_TARGET_ARCH}"; \
         grep -o "arch:[^ \"]*" /tmp/build.log | sort -u; \
         exit 1; \
+    fi; \
+    if [ "${XKOP_PACKAGE_TYPE}" = ipk ]; then \
+        pkg=$(find /builder/bin -name 'xray-xkop*.ipk' | head -n 1); \
+        test -n "$pkg"; \
+        control=$(tar -xzOf "$pkg" ./control.tar.gz | tar -xzOf - ./control); \
+        printf '%s\n' "$control" | grep -Fx "Architecture: ${XKOP_TARGET_ARCH}"; \
     fi
 
 RUN mkdir -p /builder/out \

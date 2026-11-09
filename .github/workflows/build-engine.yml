@@ -47,7 +47,7 @@ jobs:
           # Ищем релиз, где такие пакеты уже есть. Сравниваем по имени файла:
           # в него входит и версия, и архитектура — см. build ниже.
           SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=20" \
-            --jq "[.[] | select([.assets[].name] | any(startswith(\"xray-xkop-$VERSION-\"))) | .tag_name] | first // empty")
+            | jq -r --arg version "$VERSION" -f tools/engine-release-source.jq)
 
           if [ -n "$SOURCE" ] && [ "$SOURCE" != "$GITHUB_REF_NAME" ]; then
             echo "have=true" >> "$GITHUB_OUTPUT"
@@ -91,13 +91,14 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --clobber
 
   engine:
-    name: ${{ matrix.arch }}
+    name: ${{ matrix.package_type }} ${{ matrix.arch }}
     needs: check
     if: needs.check.outputs.have != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        package_type: [apk, ipk]
         # Архитектуры парка и соседние. Собираются из одного SDK: пакет несёт
         # готовый бинарник, и с роутером должно совпасть описание, а не
         # тулчейн, который его завернул.
@@ -110,6 +111,9 @@ jobs:
           - mipsel_24kc
           - mips_24kc
           - x86_64
+        include:
+          - { package_type: apk, sdk_version: '25.12.0' }
+          - { package_type: ipk, sdk_version: '24.10.8' }
     steps:
       - uses: actions/checkout@v5.0.0
 
@@ -130,31 +134,39 @@ jobs:
           file: ./Dockerfile-engine
           context: .
           target: artifacts
-          outputs: type=local,dest=./bin/${{ matrix.arch }}
+          outputs: type=local,dest=./bin/${{ matrix.package_type }}/${{ matrix.arch }}
           build-args: |
             XKOP_TARGET_ARCH=${{ matrix.arch }}
-            SDK_IMAGE=ghcr.io/${{ steps.owner.outputs.name }}/xkop-sdk-apk:25.12.0
+            XKOP_PACKAGE_TYPE=${{ matrix.package_type }}
+            SDK_IMAGE=ghcr.io/${{ steps.owner.outputs.name }}/xkop-sdk-${{ matrix.package_type }}:${{ matrix.sdk_version }}
 
       # apk не кладёт архитектуру в имя файла, и все восемь пакетов называются
       # одинаково. В релизе они затёрли бы друг друга, а на роутере нельзя
       # понять, тот ли скачался. Архитектура дописывается в имя.
       - name: Check output and name by architecture
         run: |
-          ls -l ./bin/${{ matrix.arch }}
-          [ -n "$(ls -A ./bin/${{ matrix.arch }})" ] || { echo "пакет не собрался"; exit 1; }
-          for f in ./bin/${{ matrix.arch }}/xray-xkop-*; do
+          out=./bin/${{ matrix.package_type }}/${{ matrix.arch }}
+          arch=${{ matrix.arch }}
+          for f in "$out"/*.${{ matrix.package_type }}; do
             [ -e "$f" ] || continue
             ext="${f##*.}"
             base=$(basename "$f" ".$ext")
-            mv "$f" "./bin/${{ matrix.arch }}/${base}-${{ matrix.arch }}.${ext}"
+            if [ "$ext" = ipk ]; then
+              base=${base#xray-xkop_}
+              base=${base%_$arch}
+              mv "$f" "$out/xray-xkop-$base-$arch.ipk"
+            else
+              mv "$f" "$out/$base-$arch.$ext"
+            fi
           done
-          ls -l ./bin/${{ matrix.arch }}
+          test -f "$out/xray-xkop-${{ needs.check.outputs.version }}-"*"-$arch.${{ matrix.package_type }}"
+          ls -l "$out"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: xray-xkop-${{ matrix.arch }}
-          path: ./bin/${{ matrix.arch }}/*
+          name: xray-xkop-${{ matrix.package_type }}-${{ matrix.arch }}
+          path: ./bin/${{ matrix.package_type }}/${{ matrix.arch }}/*
           retention-days: 7
           if-no-files-found: error
 

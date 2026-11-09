@@ -45,7 +45,7 @@ update_installed_version() {
             | sed -n 's/^xkop-\([0-9][^ ]*\)-r[0-9]* .*/\1/p' | head -n 1
     else
         opkg list-installed 2> /dev/null \
-            | sed -n 's/^xkop - \([0-9][^ ]*\)-r[0-9]*$/\1/p' | head -n 1
+            | sed -n 's/^xkop - \([0-9][^ ]*\)-r\{0,1\}[0-9][0-9]*$/\1/p' | head -n 1
     fi
 }
 
@@ -317,7 +317,7 @@ update_engine_installed_version() {
 
 # Без номера нашей сборки: "26.7.28-r1" и "26.7.28" — про один движок.
 update_engine_version_core() {
-    printf '%s' "${1%%-r[0-9]*}"
+    printf '%s' "$1" | sed 's/-r\{0,1\}[0-9][0-9]*$//'
 }
 
 update_engine_url_version() {
