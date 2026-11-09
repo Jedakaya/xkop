@@ -27,6 +27,13 @@ jq -e '.routing.rules[0].outboundTag=="DE-Frankfurt-1" and (.routing.balancers|l
     and .dns==null and .fakedns==null and .burstObservatory==null' "$XKOP_CONFIG_PATH" >/dev/null || exit 1
 [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] || { echo 'FAIL no bootstrap pending marker'; exit 1; }
 echo 'ok   cold start creates only a pinned loopback tunnel without geosite'
+printf missing > "$XKOP_STATE_DIR/manualpin"
+printf NL-Amsterdam-2 > "$XKOP_STATE_DIR/autopin"
+config_generate || exit 1
+jq -e '.routing.rules[0].outboundTag=="NL-Amsterdam-2"' "$XKOP_CONFIG_PATH" >/dev/null || exit 1
+echo 'ok   a stale manual pin falls back to the cached automatic node'
+printf DE-Frankfurt-1 > "$XKOP_STATE_DIR/manualpin"
+config_generate || exit 1
 if command -v "${XRAY:-xray}" >/dev/null 2>&1; then
     XRAY_LOCATION_ASSET="$work/assets" "${XRAY:-xray}" run -test -c "$XKOP_CONFIG_PATH" > "$work/engine.log" 2>&1 || {
         cat "$work/engine.log"; exit 1;

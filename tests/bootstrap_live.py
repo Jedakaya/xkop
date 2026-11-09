@@ -47,7 +47,7 @@ def ready(process, value):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        content = geosite()
+        content = b"<html>temporary upstream error</html>" if self.path == "/invalid.dat" else geosite()
         self.send_response(200)
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
@@ -133,6 +133,12 @@ curl() {
     esac
 }
 XKOP_GEOSITE_URL="$FIXTURE_URL"
+old=$(sha256sum "$XKOP_CONFIG_PATH")
+XKOP_GEOSITE_URL="${FIXTURE_URL%/*}/invalid.dat"
+if lists_update force; then echo 'invalid list accepted'; exit 1; fi
+[ ! -f "$XKOP_ASSET_DIR/geosite.dat" ] || exit 1
+[ "$old" = "$(sha256sum "$XKOP_CONFIG_PATH")" ] || exit 1
+XKOP_GEOSITE_URL="$FIXTURE_URL"
 lists_update force || {
     XRAY_LOCATION_ASSET="$XKOP_RUN_DIR/assets" "$XRAY" run -test -format json -c "$XKOP_RUN_DIR/geosite-probe.json"
     exit 1
@@ -147,6 +153,7 @@ config_generate || exit 1
         assert any(item["tag"] == "tproxy-in" for item in full["inbounds"])
         assert (work / "run/bootstrap.pending").exists(), "full config lacks confirmation gate"
         print("ok   blocked direct download succeeds through the actual cached SOCKS outbound")
+        print("ok   an invalid download preserves bootstrap and the following valid retry succeeds")
         print("ok   downloaded geosite is validated and full config awaits engine confirmation")
     except Exception:
         for path in work.glob("*.log"):
