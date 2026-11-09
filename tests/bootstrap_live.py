@@ -17,7 +17,7 @@ def field(number, value):
 
 def geosite():
     domain = b"\x08\x03" + field(2, b"example.com")
-    return field(1, field(1, b"russia-inside") + field(2, domain))
+    return field(1, field(1, b"RUSSIA-INSIDE") + field(2, domain))
 
 
 ports = set()
@@ -133,7 +133,10 @@ curl() {
     esac
 }
 XKOP_GEOSITE_URL="$FIXTURE_URL"
-lists_update force || exit 1
+lists_update force || {
+    XRAY_LOCATION_ASSET="$XKOP_RUN_DIR/assets" "$XRAY" run -test -format json -c "$XKOP_RUN_DIR/geosite-probe.json"
+    exit 1
+}
 config_generate || exit 1
 ''')
         assert (work / "direct-blocked").exists()
