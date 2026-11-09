@@ -290,8 +290,11 @@ config_generate_locked() {
     fi
 
     if [ "$bootstrap" = 1 ]; then
-        cp "$new" "$XKOP_RUN_DIR/bootstrap-config.json" || return 1
-        : > "$XKOP_RUN_DIR/bootstrap.pending" || return 1
+        # The snapshot contains subscription credentials, like the startup snapshot.
+        (umask 077
+            cp "$new" "$XKOP_RUN_DIR/bootstrap-config.json" \
+                && chmod 600 "$XKOP_RUN_DIR/bootstrap-config.json" \
+                && : > "$XKOP_RUN_DIR/bootstrap.pending") || return 1
     fi
     if [ -f "$XKOP_CONFIG_PATH" ] && cmp -s "$new" "$XKOP_CONFIG_PATH"; then
         log_info "конфигурация не изменилась"
