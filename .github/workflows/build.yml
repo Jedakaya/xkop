@@ -10,6 +10,12 @@ on:
         description: 'Package version for a verification build (without v)'
         required: false
         type: string
+      package_type:
+        description: 'Package format for a verification build'
+        required: false
+        default: all
+        type: choice
+        options: [all, apk, ipk]
 
 # Объявленный блок прав ЗАМЕНЯЕТ набор по умолчанию: всё, что здесь не
 # перечислено, выдаётся токену как none. Без packages:read сборка падает на
@@ -24,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      matrix: ${{ steps.version.outputs.matrix }}
     steps:
       - uses: actions/checkout@v5.0.0
         with:
@@ -31,6 +38,7 @@ jobs:
       - id: version
         env:
           BUILD_VERSION: ${{ inputs.version }}
+          BUILD_FORMAT: ${{ inputs.package_type }}
         run: |
           if [ -n "$BUILD_VERSION" ]; then
             echo "$BUILD_VERSION" | grep -Eq '^[0-9]+(\.[0-9]+)*$'
@@ -40,6 +48,13 @@ jobs:
           fi
           VERSION="${VERSION#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          case "$BUILD_FORMAT" in
+            apk) MATRIX='[{"package_type":"apk","sdk_version":"25.12.0"}]' ;;
+            ipk) MATRIX='[{"package_type":"ipk","sdk_version":"24.10.8"}]' ;;
+            ''|all) MATRIX='[{"package_type":"apk","sdk_version":"25.12.0"},{"package_type":"ipk","sdk_version":"24.10.8"}]' ;;
+            *) exit 1 ;;
+          esac
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.package_type }}
@@ -49,9 +64,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep both package-manager generations in every release.
-        include:
-          - { package_type: apk, sdk_version: '25.12.0' }
-          - { package_type: ipk, sdk_version: '24.10.8' }
+        include: ${{ fromJSON(needs.preparation.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v5.0.0
         with:
@@ -93,7 +106,8 @@ jobs:
             for f in ./bin/ipk/*.ipk; do
               control=$(tar -xzOf "$f" ./control.tar.gz | tar -xzOf - ./control)
               printf '%s\n' "$control" | grep -Fx 'Architecture: all'
-              printf '%s\n' "$control" | grep -Fx 'Version: ${{ needs.preparation.outputs.version }}-1'
+              version=$(printf '%s\n' "$control" | sed -n 's/^Version: //p')
+              [ "$version" = '${{ needs.preparation.outputs.version }}-1' ] || [ "$version" = '${{ needs.preparation.outputs.version }}-r1' ]
               tar -xzOf "$f" ./data.tar.gz | tar -tzf - > /dev/null
             done
           fi
