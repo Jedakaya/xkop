@@ -270,7 +270,9 @@ config_generate_locked() {
     if command -v lists_present >/dev/null 2>&1 && ! lists_present \
         && jq -e '[.. | strings | select(startswith("geosite:"))] | length > 0' "$new" >/dev/null 2>&1; then
         if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] || [ ! -s "$XKOP_CONFIG_PATH" ] \
-            || ! command -v engine_answers >/dev/null 2>&1 || ! engine_answers; then
+            || ! command -v engine_answers >/dev/null 2>&1 || ! engine_answers \
+            || ! jq -e '(.burstObservatory.subjectSelector | length) > 0
+                or any(.. | strings; startswith("geosite:"))' "$XKOP_CONFIG_PATH" >/dev/null 2>&1; then
             pin=$(cat "$XKOP_STATE_DIR/manualpin" 2>/dev/null)
             auto_pin=$(cat "$XKOP_STATE_DIR/${XKOP_AUTOPIN_MARKER_NAME:-autopin}" 2>/dev/null)
             jq --arg pin "$pin" --arg auto_pin "$auto_pin" -f "$XKOP_LIB_DIR/config-bootstrap.jq" "$new" > "$new.bootstrap.json" || return 1

@@ -45,3 +45,7 @@ engine_answers() { return 0; }
 if config_generate; then echo 'FAIL replaced a working engine with bootstrap'; exit 1; fi
 cmp -s "$XKOP_CONFIG_PATH" "$work/full.json" || exit 1
 echo 'ok   losing an asset does not replace an already working full engine'
+echo '{"outbounds":[],"routing":{"balancers":[]}}' > "$XKOP_CONFIG_PATH"
+if ! config_generate; then echo 'FAIL an answering empty engine prevents first tunnel bootstrap'; exit 1; fi
+jq -e '.routing.rules[0].outboundTag=="DE-Frankfurt-1"' "$XKOP_CONFIG_PATH" >/dev/null || exit 1
+echo 'ok   an empty answering engine can adopt newly cached nodes for bootstrap'
