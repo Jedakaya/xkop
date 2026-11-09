@@ -256,6 +256,7 @@ nodes_apply_selection() {
 nodes_apply_selection_locked() (
     umask 077
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || return 1
+    [ ! -f "$XKOP_RUN_DIR/bootstrap.pending" ] || return 1
     local tag="$1" candidate backup generated marker marker_tmp previous_pin
     marker=$(nodes_manual_marker)
     candidate="$XKOP_CONFIG_PATH.select-$$.json"

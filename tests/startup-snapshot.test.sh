@@ -69,3 +69,16 @@ service_finish_start
 wait "$writer"
 [ -f "$work/writer-blocked" ] || { echo 'FAIL startup confirmation raced with configuration writer'; exit 1; }
 echo 'ok   startup confirmation serializes with config writers'
+
+printf '{"version":"bootstrap"}' > "$XKOP_RUN_DIR/bootstrap-config.json"
+cp "$XKOP_CONFIG_PATH" "$XKOP_RUN_DIR/starting-config.json"
+: > "$XKOP_RUN_DIR/bootstrap.pending"
+service_finish_start || exit 1
+[ ! -f "$XKOP_RUN_DIR/bootstrap.pending" ] || { echo 'FAIL confirmed full engine remains in bootstrap'; exit 1; }
+echo 'ok   full engine confirmation releases bootstrap interception gate'
+
+cp "$XKOP_CONFIG_PATH" "$XKOP_RUN_DIR/bootstrap-config.json"
+: > "$XKOP_RUN_DIR/bootstrap.pending"
+service_finish_start || exit 1
+[ -f "$XKOP_RUN_DIR/bootstrap.pending" ] || { echo 'FAIL bootstrap engine falsely confirms full routing'; exit 1; }
+echo 'ok   bootstrap confirmation does not release full interception gate'

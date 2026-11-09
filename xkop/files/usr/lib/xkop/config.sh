@@ -256,13 +256,27 @@ config_generate() {
 }
 
 config_generate_locked() {
-    local new old
+    local new old bootstrap=0 pin auto_pin
     mkdir -p "$XKOP_RUN_DIR" "$(dirname "$XKOP_CONFIG_PATH")"
     new="$XKOP_RUN_DIR/config.new.json"
 
     if ! config_input_json | jq -f "$XKOP_LIB_DIR/config.jq" > "$new" 2> "$XKOP_RUN_DIR/config.err"; then
         log_error "конфигурация не собралась: $(head -n 1 "$XKOP_RUN_DIR/config.err" 2> /dev/null)"
         return 1
+    fi
+
+    # A cold start must create the loopback tunnel before its first download.
+    # Preserve a full engine already running with an in-memory copy of lists.
+    if command -v lists_present >/dev/null 2>&1 && ! lists_present \
+        && jq -e '[.. | strings | select(startswith("geosite:"))] | length > 0' "$new" >/dev/null 2>&1; then
+        if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] || [ ! -s "$XKOP_CONFIG_PATH" ] \
+            || ! command -v engine_answers >/dev/null 2>&1 || ! engine_answers; then
+            pin=$(cat "$XKOP_STATE_DIR/manualpin" 2>/dev/null)
+            auto_pin=$(cat "$XKOP_STATE_DIR/${XKOP_AUTOPIN_MARKER_NAME:-autopin}" 2>/dev/null)
+            jq --arg pin "$pin" --arg auto_pin "$auto_pin" -f "$XKOP_LIB_DIR/config-bootstrap.jq" "$new" > "$new.bootstrap.json" || return 1
+            mv "$new.bootstrap.json" "$new" || return 1
+            bootstrap=1
+        fi
     fi
 
     if ! config_validate "$new"; then
@@ -273,6 +287,10 @@ config_generate_locked() {
         return 1
     fi
 
+    if [ "$bootstrap" = 1 ]; then
+        cp "$new" "$XKOP_RUN_DIR/bootstrap-config.json" || return 1
+        : > "$XKOP_RUN_DIR/bootstrap.pending" || return 1
+    fi
     if [ -f "$XKOP_CONFIG_PATH" ] && cmp -s "$new" "$XKOP_CONFIG_PATH"; then
         log_info "конфигурация не изменилась"
         return 2

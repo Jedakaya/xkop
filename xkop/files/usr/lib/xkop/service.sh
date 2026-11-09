@@ -321,6 +321,12 @@ service_prepare() {
         fi
     fi
 
+    if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then
+        service_bootstrap_network_restore
+        log_info "запускаю служебный туннель для загрузки списков, перехват клиентов отложен"
+        return 0
+    fi
+
     nft_apply || log_warn "правила nft не применены, трафик в движок не пойдёт"
 
     # Резолвер трогается только в режиме fakeip. В обычном режиме имена
@@ -394,12 +400,23 @@ service_proxy_ready() {
 
 # Called under the work lock. Return 2 to restart outside the lock, 1 to
 # retry, 0 only when the installed configuration and local routing are ready.
+service_bootstrap_network_restore() {
+    if nft_present; then nft_clear || return 1; fi
+    dnsmasq_protection_clear
+    dnsmasq_restore
+}
+
 service_reconcile() {
     local owner="${1:-}" generated changed=0
     service_wan_ready || return 1
     [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
     # Restore local delivery before any network operation can block on it.
-    if nft_present; then nft_routing_rule || return 1; else nft_apply || return 1; fi
+    if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] \
+        || { ! lists_present && ! engine_answers; }; then
+        service_bootstrap_network_restore || return 1
+    else
+        if nft_present; then nft_routing_rule || return 1; else nft_apply || return 1; fi
+    fi
     # A startup hook may have deferred confirmation while another writer was
     # active. Confirm the loaded snapshot before deciding on another restart.
     if engine_answers; then service_finish_start || true; fi
@@ -425,6 +442,16 @@ service_reconcile() {
         [ -s "$XKOP_CONFIG_PATH" ] && config_validate "$XKOP_CONFIG_PATH" || return 1
     fi
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || changed=1
+    if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then
+        # Never send clients into the SOCKS-only bootstrap. Load the full
+        # configuration first; its startup confirmation releases this gate.
+        if [ "$changed" = 1 ] || ! engine_answers \
+            || [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] \
+            || ! cmp -s "$XKOP_RUN_DIR/bootstrap-config.json" "$XKOP_CONFIG_PATH"; then
+            return 2
+        fi
+        return 1
+    fi
     if [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] && service_proxy_ready; then changed=1; fi
     if [ "$changed" = 1 ] || ! nft_present; then
         nft_apply || return 1
@@ -473,11 +500,16 @@ service_finish_start_locked() {
     current=$(ubus call service list '{"name":"xkop"}' 2>/dev/null | jq -r '.xkop.instances.engine.pid // 0')
     [ -n "$current" ] && [ "$current" != 0 ] || return 1
     if [ "$current" = "$previous" ] \
-        && { [ -f "$XKOP_RUN_DIR/config-reload.pending" ] || [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ]; }; then return 1; fi
+        && { [ -f "$XKOP_RUN_DIR/config-reload.pending" ] || [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] \
+            || [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; }; then return 1; fi
     if cmp -s "$XKOP_RUN_DIR/starting-config.json" "$XKOP_CONFIG_PATH"; then
         rm -f "$XKOP_RUN_DIR/config-reload.pending"
         if [ "$(cat "$XKOP_RUN_DIR/starting-wan.ready" 2>/dev/null)" = 1 ]; then
             rm -f "$XKOP_RUN_DIR/wan-reprobe.pending"
+        fi
+        if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] \
+            && ! cmp -s "$XKOP_RUN_DIR/bootstrap-config.json" "$XKOP_CONFIG_PATH"; then
+            rm -f "$XKOP_RUN_DIR/bootstrap.pending" "$XKOP_RUN_DIR/bootstrap-config.json"
         fi
     fi
     return 0
@@ -627,7 +659,9 @@ service_started_check() {
         # В фоне: закрепление спрашивает движок, а start_service_done не место
         # для ожидания.
         # Selection writes the startup config too. Do not race its transaction.
-        (lock_run work nodes_keep > /dev/null 2>&1 &)
+        if [ ! -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then
+            (lock_run work nodes_keep > /dev/null 2>&1 &)
+        fi
 
         # И то, что не скачалось, пока движка ещё не было.
         recovery_start
@@ -725,7 +759,7 @@ service_control() {
 # и повторять сборку пула и запрос к эндпоинту незачем.
 service_status_json() {
     local nodes="${1:-}" answering_in="${2:-}"
-    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0
+    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0 bootstrap=0
 
     [ -x /etc/rc.d/S99xkop ] && enabled=1
     engine_process_running && running=1
@@ -745,12 +779,14 @@ service_status_json() {
     service_wan_ready && wan_ready=1
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || pending=1
     [ ! -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] || pending=1
+    if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then bootstrap=1; pending=1; fi
 
     jq -nc \
         --argjson enabled "$enabled" --argjson running "$running" \
         --argjson answering "$answering" --argjson nodes "$nodes" \
         --argjson proxy_ready "$proxy_ready" --argjson routing_ready "$routing_ready" --argjson wan_ready "$wan_ready" \
         --argjson pending "$pending" \
+        --argjson bootstrap "$bootstrap" \
         --argjson config "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
         --argjson rules "$(nft_present && echo true || echo false)" \
         '{
@@ -762,9 +798,12 @@ service_status_json() {
             nodes: $nodes,
             routing_ready: ($routing_ready == 1 and $proxy_ready == 1 and $pending == 0),
             config_pending: ($pending == 1),
+            lists_pending: ($bootstrap == 1),
             wan_ready: ($wan_ready == 1),
             state: (
-                if ($running == 1) and ($answering == 1) and ($wan_ready == 0) then "ожидает WAN"
+                if ($bootstrap == 1) and ($answering == 1) then "движок запущен, загружает списки"
+                elif ($bootstrap == 1) then "подготовка туннеля для загрузки списков"
+                elif ($running == 1) and ($answering == 1) and ($wan_ready == 0) then "ожидает WAN"
                 elif ($running == 1) and ($answering == 1) and ($proxy_ready == 0) then "движок запущен, ожидает серверы"
                 elif ($running == 1) and ($answering == 1) and ($pending == 1) then "применяется конфигурация"
                 elif ($running == 1) and ($answering == 1) and $rules and ($routing_ready == 1) then "работает"

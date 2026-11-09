@@ -1010,7 +1010,7 @@ if [ -z "$INSTALLED_FROM" ]; then
     # и недостающая означает не «без одной возможности», а команду, которая
     # не запускается вовсе. Полнота списка проверяется в tests/installer.test.sh.
     XKOP_LIBS="constants.sh logging.sh lock.sh version.sh stats.sh stats.jq
-subscription.sh subscription.jq config.sh config.jq lists.sh userlists.sh
+subscription.sh subscription.jq config.sh config.jq config-bootstrap.jq lists.sh userlists.sh
 nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh update.sh
 service.sh migrate.sh"
 

@@ -68,4 +68,7 @@ check 'missing manual node returns to normal pool' direct "$("$JQ" -r '.routing.
 "$JQ" '.manual_pin = "NL-Amsterdam-2" | .pool += [{tag:"__xkop_manual__evil",outbound:{tag:"__xkop_manual__evil",protocol:"freedom"}}]' "$ROOT/tests/fixtures/config/with-pool.json" |
     "$JQ" -f "$LIB/config.jq" > "$work/prefix.json"
 check 'subscription names cannot collide with manual selector' true "$("$JQ" '[.outbounds[].tag] as $tags | .routing.balancers[0].selector | all(. as $prefix | $tags | all(startswith($prefix) | not))' "$work/prefix.json")"
+: > "$XKOP_RUN_DIR/bootstrap.pending"
+out=$(nodes_select NL-Amsterdam-2)
+check 'selection waits for full routing during bootstrap' false "$(printf '%s' "$out" | "$JQ" -r '.ok')"
 [ "$failed" -eq 0 ]
