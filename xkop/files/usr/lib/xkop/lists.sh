@@ -31,8 +31,11 @@ XKOP_GEOSITE_PROBE='russia-inside'
 # ли движок. Через туннель - только когда прямая не вышла, и об этом сказано
 # в журнале, чтобы «списки обновились» не скрывало, каким путём.
 lists_download() {
-    local url="$1" target="$2" timeout="${3:-60}" direct_timeout=15
-    [ "$timeout" -ge "$direct_timeout" ] || direct_timeout="$timeout"
+    local url="$1" target="$2" timeout="${3:-60}" direct_timeout
+    direct_timeout="$timeout"
+    if command -v xray > /dev/null 2>&1 && engine_answers 2>/dev/null; then
+        [ "$direct_timeout" -le 15 ] || direct_timeout=15
+    fi
 
     curl -fsSL --connect-timeout 5 --max-time "$direct_timeout" -o "$target" "$url" 2> /dev/null && return 0
 

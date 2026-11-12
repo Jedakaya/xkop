@@ -27,4 +27,11 @@ engine_answers() { return 1; }
 : > "$work/calls"
 if lists_download https://github.com/example/geosite.dat "$work/absent" 10; then exit 1; fi
 [ "$(wc -l < "$work/calls" | tr -d ' ')" = 1 ] || exit 1
+grep -q -- '--connect-timeout 5 --max-time 10' "$work/calls" || exit 1
 echo 'ok   no tunnel request is attempted when the engine is down'
+: > "$work/calls"
+if lists_download https://github.com/example/geosite.dat "$work/absent" 120; then exit 1; fi
+grep -q -- '--connect-timeout 5 --max-time 120' "$work/calls" || {
+    echo 'FAIL direct budget is shortened without a usable tunnel fallback'; exit 1;
+}
+echo 'ok   a slow direct path keeps its full budget when no tunnel is available'
