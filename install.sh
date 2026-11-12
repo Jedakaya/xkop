@@ -12,9 +12,8 @@
 #
 #   xkop update
 #
-# Если релиза ещё нет или под эту архитектуру пакета не собрано, установщик
-# кладёт файлы прямо с ветки. Это путь для разработки: он рабочий, но версии
-# у него нет, только хэш коммита.
+# Package failures stop installation. File-based development installation
+# requires the explicit XKOP_FROM_BRANCH=1 option.
 #
 # Обращение с пакетным менеджером, местом, часами и панелью перенято из
 # podkop-forge целиком: там каждое правило куплено отказом на живом роутере,
@@ -85,7 +84,7 @@ run_bounded() {
 # которого этот скрипт и написан.
 download() {
     local url="$1" target="$2" part="$2.part" err="$2.download.log" host resolver ip
-    local dnsfile="$2.dns" candidates="$2.addresses"
+    local dnsfile="$2.dns" candidates="$2.addresses" redirect_host redirect_ip
     if command -v curl > /dev/null 2>&1; then
         if curl -4 -fsSL --retry 1 --connect-timeout 8 --max-time 45 -o "$part" "$url" 2> "$err"; then
             mv "$part" "$target"
@@ -101,9 +100,20 @@ download() {
                     }' "$dnsfile" 2>/dev/null | sort -u | head -n 2 > "$candidates"
                     while read -r ip; do
                         [ -n "$ip" ] || continue
+                        set -- --resolve "$host:443:$ip"
+                        # curl follows releases onto another hostname; its DNS
+                        # must also bypass a broken router resolver.
+                        for redirect_host in release-assets.githubusercontent.com objects.githubusercontent.com; do
+                            [ "$redirect_host" != "$host" ] || continue
+                            run_bounded 5 sh -c 'nslookup "$1" "$2" > "$3" 2>/dev/null' sh "$redirect_host" "$resolver" "$dnsfile"
+                            redirect_ip=$(awk '/^Name:/ { answer=1 } answer && /^Address/ {
+                                ip=$NF; if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print ip; exit }
+                            }' "$dnsfile" 2>/dev/null)
+                            [ -z "$redirect_ip" ] || set -- "$@" --resolve "$redirect_host:443:$redirect_ip"
+                        done
                         note "повтор загрузки $host через $ip (TLS проверяется)"
                         if curl -4 -fsSL --connect-timeout 5 --max-time 30 \
-                            --resolve "$host:443:$ip" -o "$part" "$url" 2>> "$err"; then
+                            "$@" -o "$part" "$url" 2>> "$err"; then
                             rm -f "$dnsfile" "$candidates"
                             mv "$part" "$target"
                             return $?
@@ -485,13 +495,13 @@ file_unowned() {
 }
 
 branch_install_remove() {
-    note "убираю установку с ветки: пакет положит те же файлы"
-    [ -x /etc/init.d/xkop ] && /etc/init.d/xkop stop > /dev/null 2>&1
-    rm -rf /usr/lib/xkop /www/luci-static/resources/view/xkop
-    rm -f /usr/bin/xkop /etc/init.d/xkop
-    rm -f /usr/share/luci/menu.d/luci-app-xkop.json \
-        /usr/share/rpcd/acl.d/luci-app-xkop.json
-    # /etc/config/xkop остаётся: это единственный файл, где не наше состояние.
+    die "обнаружен Xkop вне пакетного менеджера; рабочие файлы сохранены. Для обновления файлами явно задайте XKOP_FROM_BRANCH=1; переход на пакет требует штатного удаления прежней установки"
+}
+
+install_require_release() {
+    [ "${XKOP_FROM_BRANCH:-0}" = 1 ] && return 0
+    [ "$INSTALLED_FROM" = release ] && return 0
+    die "пакетная установка не завершена; автоматический переход на файлы отключён. Исправьте указанную выше ошибку и повторите запуск"
 }
 
 # --- панель ---------------------------------------------------------------
@@ -641,7 +651,8 @@ check_system() {
     version=$(sed -n "s/^DISTRIB_RELEASE='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" /etc/openwrt_release 2> /dev/null | head -n 1)
     [ -n "$version" ] && note "OpenWrt $version"
 
-    nslookup google.com > /dev/null 2>&1 || die "DNS не работает, ставить нечем"
+    nslookup downloads.openwrt.org > /dev/null 2>&1 \
+        || warn "DNS репозитория OpenWrt не ответил; дальнейшие загрузки проверяются отдельно"
 }
 
 pkg_format() {
@@ -1012,17 +1023,19 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
                     fi
                 fi
             else
-                warn "пакет xkop не встал, перехожу на файлы с ветки"
+                warn "пакет xkop не встал"
             fi
         else
-            note "в релизе нет пакета под $FORMAT, беру файлы с ветки"
+            warn "в релизе нет пакета под $FORMAT"
         fi
     else
-        note "релизов ещё нет, беру файлы с ветки"
+        warn "метаданные релиза не получены; проверьте журнал загрузки"
     fi
 fi
 
-# --- файлами с ветки, если пакетами не вышло ------------------------------
+install_require_release
+
+# --- Files from a branch, only when explicitly requested -----------------
 
 # Ветка разрешается в хэш один раз, и дальше всё тянется по хэшу.
 # raw.githubusercontent отдаёт ветку из кэша и параметры запроса игнорирует —

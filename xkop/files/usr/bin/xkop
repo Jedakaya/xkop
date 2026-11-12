@@ -388,8 +388,7 @@ main() {
             ;;
         start | stop | restart | enable)
             # Служба живёт в procd, и решение о процессе принимает он.
-            /etc/init.d/xkop "$command" > /dev/null 2>&1
-            jq -nc --arg action "$command" '{ok: true, result: $action}'
+            service_control "$command" | jq --arg action "$command" '. + {result: $action}'
             ;;
         disable)
             # Выключение автозапуска не имеет права оставить сеть без имён.
@@ -407,15 +406,15 @@ main() {
 
             restored=0
             if ! engine_process_running; then
-                dnsmasq_restore > /dev/null 2>&1
-                restored=1
+                if dnsmasq_restore; then restored=1; else restored=-1; fi
             fi
 
             jq -nc --argjson restored "$restored" \
-                '{ok: true, result: "disable",
+                '{ok: ($restored != -1), result: "disable",
                   resolver_restored: ($restored == 1),
                   hint: (if $restored == 1
                          then "резолвер возвращён: служба не работала"
+                         elif $restored == -1 then "восстановление DNS не подтверждено, данные для повторной попытки сохранены"
                          else "служба продолжает работать; при остановке резолвер вернётся сам"
                          end)}'
             ;;

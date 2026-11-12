@@ -322,7 +322,7 @@ service_prepare() {
     fi
 
     if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then
-        service_bootstrap_network_restore
+        service_bootstrap_network_restore || return 1
         log_info "запускаю служебный туннель для загрузки списков, перехват клиентов отложен"
         return 0
     fi
@@ -402,8 +402,7 @@ service_proxy_ready() {
 # retry, 0 only when the installed configuration and local routing are ready.
 service_bootstrap_network_restore() {
     if nft_present; then nft_clear || return 1; fi
-    dnsmasq_protection_clear
-    dnsmasq_restore
+    dnsmasq_cleanup
 }
 
 service_reconcile() {
@@ -411,6 +410,12 @@ service_reconcile() {
     service_wan_ready || return 1
     [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
     # Restore local delivery before any network operation can block on it.
+    if command -v dnsmasq_verify > /dev/null 2>&1; then
+        if [ "$(config_uci_get settings dns_mode)" != fakeip ]; then
+            dnsmasq_restore || return 1
+        fi
+        dnsmasq_verify || dnsmasq_restart_checked || return 1
+    fi
     if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] \
         || { ! lists_present && ! engine_answers; }; then
         service_bootstrap_network_restore || return 1
@@ -703,8 +708,10 @@ service_teardown() {
     cron_remove
 
     nft_clear
-    dnsmasq_protection_clear
-    dnsmasq_restore
+    dnsmasq_cleanup || {
+        log_error "остановка: локальный DNS не восстановлен, сохранены данные для повторной попытки"
+        return 1
+    }
 }
 
 # Интернет поднялся. Это важный момент: при старте роутера WAN обычно ещё
@@ -724,14 +731,14 @@ service_on_wan_up() {
 # says nothing about whether the engine came up. Here the action is followed by
 # the same status the overview shows.
 service_control() {
-    local action="${1:-status}"
+    local action="${1:-status}" action_rc=0
 
     case "$action" in
         start | stop | restart)
-            /etc/init.d/xkop "$action" > /dev/null 2>&1
+            service_init_action "$action" || action_rc=$?
             ;;
         enable | disable)
-            /etc/init.d/xkop "$action" > /dev/null 2>&1
+            service_init_action "$action" || action_rc=$?
             ;;
         status) ;;
         *)
@@ -751,15 +758,21 @@ service_control() {
         start | restart) engine_wait 8 > /dev/null 2>&1 ;;
     esac
 
-    jq -nc --arg a "$action" --argjson status "$(service_status_json)" \
-        '{ok: true, action: $a} + $status'
+    jq -nc --arg a "$action" --argjson rc "$action_rc" --argjson status "$(service_status_json)" \
+        '$status + {ok: ($rc == 0 and ($a != "stop" or $status.dns_ready != false)),
+          action: $a, action_exit_code: $rc}
+         | if .ok then . else . + {error: "service_action_failed"} end'
+}
+
+service_init_action() {
+    /etc/init.d/xkop "$1" > /dev/null 2>&1
 }
 
 # Количество узлов и признак ответа можно передать снаружи: обзор их уже знает,
 # и повторять сборку пула и запрос к эндпоинту незачем.
 service_status_json() {
     local nodes="${1:-}" answering_in="${2:-}"
-    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0 bootstrap=0
+    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0 bootstrap=0 dns_ready=1
 
     [ -x /etc/rc.d/S99xkop ] && enabled=1
     engine_process_running && running=1
@@ -776,6 +789,9 @@ service_status_json() {
     [ -n "$nodes" ] || nodes=0
     service_proxy_ready && proxy_ready=1
     nft_routing_ready && routing_ready=1
+    if command -v dnsmasq_verify > /dev/null 2>&1; then
+        dnsmasq_verify || dns_ready=0
+    fi
     service_wan_ready && wan_ready=1
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || pending=1
     [ ! -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] || pending=1
@@ -789,6 +805,7 @@ service_status_json() {
         --argjson proxy_ready "$proxy_ready" --argjson routing_ready "$routing_ready" --argjson wan_ready "$wan_ready" \
         --argjson pending "$pending" \
         --argjson bootstrap "$bootstrap" \
+        --argjson dns_ready "$dns_ready" \
         --argjson config "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
         --argjson rules "$(nft_present && echo true || echo false)" \
         '{
@@ -798,12 +815,14 @@ service_status_json() {
             config_present: $config,
             nft_rules: $rules,
             nodes: $nodes,
-            routing_ready: ($routing_ready == 1 and $proxy_ready == 1 and $pending == 0),
+            routing_ready: ($routing_ready == 1 and $proxy_ready == 1 and $pending == 0 and $dns_ready == 1),
+            dns_ready: ($dns_ready == 1),
             config_pending: ($pending == 1),
             lists_pending: ($bootstrap == 1),
             wan_ready: ($wan_ready == 1),
             state: (
-                if ($bootstrap == 1) and ($answering == 1) then "движок запущен, загружает списки"
+                if ($dns_ready == 0) then "локальный DNS не отвечает"
+                elif ($bootstrap == 1) and ($answering == 1) then "движок запущен, загружает списки"
                 elif ($bootstrap == 1) then "подготовка туннеля для загрузки списков"
                 elif ($running == 1) and ($answering == 1) and ($wan_ready == 0) then "ожидает WAN"
                 elif ($running == 1) and ($answering == 1) and ($proxy_ready == 0) then "движок запущен, ожидает серверы"

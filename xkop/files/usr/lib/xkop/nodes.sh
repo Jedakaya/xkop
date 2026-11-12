@@ -44,7 +44,7 @@ nodes_balancer_field() {
 }
 
 nodes_selection_json() {
-    local output selected override
+    local output selected override manual_intent
 
     output=$(nodes_api bi "$XKOP_BALANCER_TAG")
     if [ -z "$output" ]; then
@@ -55,6 +55,7 @@ nodes_selection_json() {
 
     override=$(nodes_balancer_field "$output" "Selecting Override")
     selected=$(nodes_balancer_field "$output" "Selects")
+    manual_intent=$(cat "$(nodes_manual_marker)" 2> /dev/null)
 
     # Закрепление сильнее стратегии, и показывать надо именно его.
     #
@@ -63,11 +64,11 @@ nodes_selection_json() {
     # на закреплённый узел: проверено на живом движке — в журнале доступа
     # стоит закреплённый узел, а "Selects" показывает другой. Мы показывали
     # "Selects", и человек справедливо решал, что его выбор игнорируют.
-    jq -nc --arg selected "$selected" --arg override "$override" \
+    jq -nc --arg selected "$selected" --arg override "$override" --arg manual "$manual_intent" \
         '{
             ok: true,
             balancer: "pool",
-            selection: (if $override != "" then "manual" else "auto" end),
+            selection: (if $manual != "" then "manual" else "auto" end),
             selected: (if $override != "" then $override
                        elif $selected == "" then null
                        else $selected end),
@@ -376,7 +377,7 @@ nodes_keep() {
     # Выбор человека восстанавливается первым и без оговорок: движок потерял
     # закрепление при перезапуске, а решение осталось.
     chosen=$(cat "$(nodes_manual_marker)" 2> /dev/null)
-    if [ -n "$chosen" ] && [ -z "$override" ]; then
+    if [ -n "$chosen" ] && [ "$chosen" != "$override" ]; then
         if subscription_pool_all | jq -e --arg tag "$chosen" 'any(.[]; .tag == $tag)' > /dev/null 2>&1; then
             if ! nodes_api bo -b "$XKOP_BALANCER_TAG" "$chosen" > /dev/null 2>&1; then
                 jq -nc --arg tag "$chosen" '{ok: false, error: "override_failed", detail: {tag: $tag}}'
@@ -395,7 +396,7 @@ nodes_keep() {
     fi
 
     # Чужое закрепление - решение человека, и оно не обсуждается.
-    if [ -n "$override" ] && [ "$override" != "$mine" ]; then
+    if [ -n "$override" ] && [ "$override" = "$chosen" ]; then
         jq -nc --arg tag "$override" \
             '{ok: true, result: "manual", selected: $tag,
               reason: "закреплено вручную, автоматика не вмешивается"}'

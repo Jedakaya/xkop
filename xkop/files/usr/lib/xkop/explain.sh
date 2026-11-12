@@ -181,8 +181,28 @@ explain_addresses() {
     printf '%s' "$result"
 }
 
+explain_hosts_overrides() {
+    local domain="$1" file
+    {
+        for file in "${XKOP_HOSTS_FILE:-/etc/hosts}" "${XKOP_HOSTS_DIR:-/tmp/hosts}"/*; do
+            [ -f "$file" ] || continue
+            awk -v wanted="$domain" '
+                BEGIN { wanted=tolower(wanted); sub(/\.$/, "", wanted) }
+                { sub(/#.*/, "") }
+                NF > 1 {
+                    for (i=2; i<=NF; i++) {
+                        name=tolower($i); sub(/\.$/, "", name)
+                        if (name==wanted) { print FILENAME "\t" FNR "\t" $1; break }
+                    }
+                }
+            ' "$file"
+        done
+    } | jq -Rs 'split("\n") | map(select(length>0) | split("\t")
+        | {file: .[0], line: (.[1]|tonumber), address: .[2]})'
+}
+
 explain_domain() {
-    local domain="$1" observed line outbound reason rules requests probed=0 addresses
+    local domain="$1" observed line outbound reason rules requests probed=0 addresses hosts
 
     if [ -z "$domain" ]; then
         jq -nc '{ok: false, error: "no_domain"}'
@@ -205,6 +225,7 @@ explain_domain() {
     fi
 
     addresses=$(explain_addresses "$domain")
+    hosts=$(explain_hosts_overrides "$domain")
     observed=$(access_lines_for "$domain" \
         "$(printf '%s' "$addresses" | jq -r '.[]?.address' 2> /dev/null)")
     line=$(printf '%s' "$observed" | tail -n 1)
@@ -227,6 +248,7 @@ explain_domain() {
         --argjson rules "${rules:-null}" \
         --argjson pool "$(subscription_pool_all)" \
         --argjson addresses "${addresses:-null}" \
+        --argjson hosts "${hosts:-[]}" \
         --argjson requests "$requests" \
         '
         ($pool | map(select(.tag == $outbound)) | first) as $node
@@ -257,13 +279,16 @@ explain_domain() {
             ),
             rule: $rules,
             addresses: $addresses,
+            hosts_overrides: $hosts,
             hint: (
                 # Один случай стоит отдельной строки, потому что снаружи
                 # выглядит как что угодно, только не как своя причина: имя
                 # ушло напрямую, адрес настоящий, и в перехват он не попадает.
                 # Если сайт при этом не открывается, дело не в маршрутизации,
                 # а в том, что до этого адреса не дают дойти.
-                if $outbound == "direct" and $addresses != null
+                if ($hosts | length) > 0
+                then "домен задан статически в hosts: dnsmasq может ответить до Xray и обойти FakeIP; проверьте hosts_overrides"
+                elif $outbound == "direct" and $addresses != null
                    and (($addresses
                          | map(select(.fake == false and .intercepted == false))
                          | length) > 0)

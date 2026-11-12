@@ -23,7 +23,9 @@ CONF="$XKOP_TEST_UCI"
 args=""
 for a in "$@"; do [ "$a" = "-q" ] && continue; args="$args $a"; done
 set -- $args
+if [ "${XKOP_TEST_UCI_FAIL:-}" = "$1" ]; then exit 1; fi
 key="${2%%=*}"; value="${2#*=}"
+if [ "$1" != get ] && [ "${XKOP_TEST_UCI_FAIL_KEY:-}" = "$key" ]; then exit 1; fi
 case "$1" in
     get)
         # Ключ содержит "[0]", и sed принял бы это за класс символов —
@@ -45,7 +47,8 @@ case "$1" in
     delete)
         grep -v -F "$key=" "$CONF" > "$CONF.tmp" 2>/dev/null; mv "$CONF.tmp" "$CONF"
         ;;
-    commit) : ;;
+    commit) cp "$CONF" "$CONF.committed" ;;
+    revert) cp "$CONF.committed" "$CONF" ;;
     *) exit 1 ;;
 esac
 STUB
@@ -53,8 +56,10 @@ chmod +x "$work/bin/uci"
 
 # Перезапуск dnsmasq в проверке ничего не делает.
 mkdir -p "$work/etc/init.d"
-printf '#!/bin/sh\nexit 0\n' > "$work/etc/init.d/dnsmasq"
+printf '#!/bin/sh\nexit "${XKOP_TEST_INIT_RC:-0}"\n' > "$work/etc/init.d/dnsmasq"
 chmod +x "$work/etc/init.d/dnsmasq"
+printf '#!/bin/sh\nexit "${XKOP_TEST_DNS_RC:-0}"\n' > "$work/bin/nslookup"
+chmod +x "$work/bin/nslookup"
 
 PATH="$work/bin:$PATH"
 export PATH
@@ -190,6 +195,69 @@ dnsmasq_configure
 check "заглушка не сохранена как прежняя" "" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
 dnsmasq_restore
 check "после возврата заглушки нет" "" "$(value_of 'dhcp.@dnsmasq[0].server')"
+
+# Failed restarts must preserve recovery data and report failure.
+cat > "$XKOP_TEST_UCI" << 'EOF2'
+dhcp.@dnsmasq[0].server=9.9.9.9
+dhcp.@dnsmasq[0].noresolv=1
+EOF2
+XKOP_TEST_INIT_RC=42; export XKOP_TEST_INIT_RC
+dnsmasq_configure; rc=$?
+check "ошибка запуска DNS возвращается" "1" "$rc"
+check "сохранён прежний сервер после отказа" "9.9.9.9" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
+dnsmasq_restore; rc=$?
+check "ошибка восстановления DNS возвращается" "1" "$rc"
+check "копия серверов не теряется" "9.9.9.9" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
+check "неподтверждённое восстановление помечено" "1" "$(value_of 'dhcp.@dnsmasq[0].xkop_restore_pending')"
+XKOP_TEST_INIT_RC=0; export XKOP_TEST_INIT_RC
+dnsmasq_restore; rc=$?
+check "повтор восстанавливает DNS" "0" "$rc"
+check "повтор сохраняет исходный сервер" "9.9.9.9" "$(value_of 'dhcp.@dnsmasq[0].server')"
+check "после подтверждения копия удалена" "" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
+check "после подтверждения ожидание снято" "" "$(value_of 'dhcp.@dnsmasq[0].xkop_restore_pending')"
+XKOP_TEST_DNS_RC=1; export XKOP_TEST_DNS_RC
+dnsmasq_configure; rc=$?
+check "успешного init недостаточно без ответа DNS" "1" "$rc"
+XKOP_TEST_DNS_RC=0; export XKOP_TEST_DNS_RC
+dnsmasq_restore
+
+# A healthy old listener cannot hide a failed persistent update.
+dnsmasq_configure
+XKOP_TEST_UCI_FAIL=commit; export XKOP_TEST_UCI_FAIL
+dnsmasq_restore; rc=$?
+check "ошибка commit не выдаётся за успех" "1" "$rc"
+check "после ошибки commit копия сохранена" "9.9.9.9" "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
+XKOP_TEST_UCI_FAIL=''; export XKOP_TEST_UCI_FAIL
+dnsmasq_restore
+
+# A restart ignoring TERM must still have a hard deadline.
+printf '#!/bin/sh\ntrap "" TERM\nsleep 5\n' > "$work/etc/init.d/hanging-dnsmasq"
+chmod +x "$work/etc/init.d/hanging-dnsmasq"
+dnsmasq_run_bounded 1 "$work/etc/init.d/hanging-dnsmasq" > "$work/hanging.log" 2>&1
+rc=$?
+check "зависший restart принудительно завершается" yes "$([ "$rc" -ne 0 ] && echo yes || echo no)"
+
+dnsmasq_configure
+uci -q add_list 'dhcp.@dnsmasq[0].filter_rr=HTTPS'
+dnsmasq_cleanup; rc=$?
+check "совместная очистка восстанавливает DNS" 0 "$rc"
+check "совместная очистка убирает фильтры" "" "$(value_of 'dhcp.@dnsmasq[0].filter_rr')"
+
+# A partial backup must not be mistaken for a completed switch.
+XKOP_TEST_UCI_FAIL_KEY='dhcp.@dnsmasq[0].xkop_noresolv'; export XKOP_TEST_UCI_FAIL_KEY
+dnsmasq_configure; rc=$?
+check "неполная копия не считается переключением DNS" 1 "$rc"
+XKOP_TEST_UCI_FAIL_KEY=''; export XKOP_TEST_UCI_FAIL_KEY
+dnsmasq_configure; rc=$?
+check "повтор после неполной копии переключает DNS" 0 "$rc"
+check "действительно установлен сервер Xray" 127.0.0.43 "$(value_of 'dhcp.@dnsmasq[0].server')"
+XKOP_TEST_UCI_FAIL_KEY='dhcp.@dnsmasq[0].xkop_noresolv'; export XKOP_TEST_UCI_FAIL_KEY
+dnsmasq_restore; rc=$?
+check "неполная очистка копии не считается успехом" 1 "$rc"
+check "исходный сервер сохранён после неполной очистки" 9.9.9.9 "$(value_of 'dhcp.@dnsmasq[0].xkop_server')"
+XKOP_TEST_UCI_FAIL_KEY=''; export XKOP_TEST_UCI_FAIL_KEY
+dnsmasq_restore; rc=$?
+check "повтор после неполной очистки сохраняет сервер" 9.9.9.9 "$(value_of 'dhcp.@dnsmasq[0].server')"
 
 echo "$((total - failed))/$total"
 

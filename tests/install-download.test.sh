@@ -44,6 +44,7 @@ check "альтернативный адрес после тайм-аута" 0 "
 check "полная загрузка установлена" complete "$(cat "$work/target")"
 check "TLS не отключается" 0 "$(grep -Ec -- '--insecure|(^| )-k( |$)' "$work/curl-calls")"
 check "проверен альтернативный IP" yes "$(grep -q -- '--resolve github.com:443:192.0.2.10' "$work/curl-calls" && echo yes || echo no)"
+check "DNS перенаправления релиза тоже обходится" yes "$(grep -q -- '--resolve release-assets.githubusercontent.com:443:192.0.2.10' "$work/curl-calls" && echo yes || echo no)"
 DOWNLOAD_TEST_FAIL=1
 printf original > "$work/target"
 download https://github.com/example/release "$work/target"; rc=$?

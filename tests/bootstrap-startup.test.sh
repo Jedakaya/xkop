@@ -19,6 +19,7 @@ nft_routing_rule() { echo rule >> "$work/unsafe"; }
 nft_clear() { echo clear >> "$work/order"; }
 dnsmasq_restore() { echo restore >> "$work/order"; }
 dnsmasq_protection_clear() { :; }
+dnsmasq_cleanup() { dnsmasq_protection_clear; dnsmasq_restore; }
 dnsmasq_configure() { echo dns >> "$work/unsafe"; }
 dnsmasq_protection() { echo protection >> "$work/unsafe"; }
 panel_present() { return 1; }
@@ -51,3 +52,7 @@ printf '%s' "$status" | jq -e '.lists_pending==false and .state=="останов
     echo 'FAIL explicitly stopped bootstrap is still shown as loading'; exit 1;
 }
 echo 'ok   an explicit stop is shown as stopped even with cached bootstrap state'
+dnsmasq_verify() { return 1; }
+status=$(service_status_json)
+printf '%s' "$status" | jq -e '.dns_ready==false and .routing_ready==false and .state=="локальный DNS не отвечает"' >/dev/null || exit 1
+echo 'ok   dead local DNS is exposed in status'

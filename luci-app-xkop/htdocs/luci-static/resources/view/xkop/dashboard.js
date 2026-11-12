@@ -157,7 +157,7 @@ function renderServiceWidget(data, refresh) {
   }
 
   const body = [
-    big(svc.lists_pending ? _("загружает списки") : (running ? _("работает") : _("остановлен"))),
+    big(svc.dns_ready === false ? _("ошибка DNS") : (svc.lists_pending ? _("загружает списки") : (running ? _("работает") : _("остановлен")))),
     // Подпись — только если говорит что-то сверх крупной строки: «работает»
     // дважды подряд читалось как сбой вёрстки.
     (svc.state && svc.state !== (running ? _("работает") : _("остановлен")))

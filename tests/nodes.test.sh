@@ -75,6 +75,11 @@ check "блоки не смешиваются" "NL-Amsterdam-2" \
 # закреплённый узел, а "Selects" показывает другой, самый быстрый. Показывая
 # "Selects", интерфейс убеждал человека, что его выбор игнорируют.
 JQ=${JQ:-jq}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+XKOP_STATE_DIR="$work/state"
+XKOP_RUN_DIR="$work/run"
+mkdir -p "$XKOP_STATE_DIR" "$XKOP_RUN_DIR"
 
 both='  - Selecting Override:
     1   FI
@@ -82,6 +87,7 @@ both='  - Selecting Override:
     1   DE'
 
 nodes_api() { printf '%s' "$both"; }
+printf FI > "$(nodes_manual_marker)"
 
 sel=$(nodes_selection_json)
 check "при закреплении показывается закреплённый" "FI"     "$(printf '%s' "$sel" | "$JQ" -r '.selected')"
@@ -91,8 +97,18 @@ check "и это названо ручным" "manual"     "$(printf '%s' "$sel"
 # Прежняя сборка движка при закреплении оставляла "Selects" пустым. Работать
 # должно и так: показывается всё равно закреплённый.
 nodes_api() { printf '%s' "$manual"; }
+printf NL-Amsterdam-2 > "$(nodes_manual_marker)"
 sel=$(nodes_selection_json)
 check "и когда движок молчит про выбор стратегии" "NL-Amsterdam-2"     "$(printf '%s' "$sel" | "$JQ" -r '.selected')"
+
+# Automatic holding must never become a manual user choice.
+rm -f "$(nodes_manual_marker)"
+printf NL-Amsterdam-2 > "$(nodes_autopin_marker)"
+sel=$(nodes_selection_json)
+check "удержание автоматики остаётся авто" "auto" "$(printf '%s' "$sel" | "$JQ" -r '.selection')"
+rm -f "$(nodes_autopin_marker)"
+sel=$(nodes_selection_json)
+check "утрата метки не создаёт ручной выбор" "auto" "$(printf '%s' "$sel" | "$JQ" -r '.selection')"
 
 # Без закрепления показывается то, что выбрала стратегия.
 #

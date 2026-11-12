@@ -123,6 +123,7 @@ MAXDELAY=0
 
 reset
 SELECTION='{"ok":true,"balancer":"pool","selection":"manual","selected":"NL","override":"NL"}'
+printf NL > "$(nodes_manual_marker)"
 STATS='{"observatory":{"nodes":[
     {"tag":"NL","state":"alive","delay_ms":900},
     {"tag":"FI","state":"alive","delay_ms":100}]}}'
@@ -134,6 +135,7 @@ check "и ничего не переключено" "" "$(pinned)"
 # --- своё же закрепление менять можно -------------------------------------
 
 reset
+rm -f "$(nodes_manual_marker)"
 printf 'NL' > "$(nodes_autopin_marker)"
 out=$(nodes_keep)
 check "своё закрепление автоматика вправе сменить" "switched" \

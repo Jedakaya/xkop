@@ -78,7 +78,11 @@ endef
 define Package/xkop/prerm
 #!/bin/sh
 
-/etc/init.d/xkop stop 2>/dev/null
+# Keep recovery tools installed when restoring the router DNS fails.
+if [ -x /usr/bin/xkop ]; then
+	/usr/bin/xkop teardown || exit 1
+fi
+/etc/init.d/xkop stop 2>/dev/null || exit 1
 
 # Панель клиента — не файлы пакета, а отдельный экземпляр uhttpd, заведённый
 # нами в uci. Пакет его не унесёт: удаление пакета оставляло слушателя
