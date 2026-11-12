@@ -31,14 +31,15 @@ XKOP_GEOSITE_PROBE='russia-inside'
 # ли движок. Через туннель - только когда прямая не вышла, и об этом сказано
 # в журнале, чтобы «списки обновились» не скрывало, каким путём.
 lists_download() {
-    local url="$1" target="$2" timeout="${3:-60}"
+    local url="$1" target="$2" timeout="${3:-60}" direct_timeout=15
+    [ "$timeout" -ge "$direct_timeout" ] || direct_timeout="$timeout"
 
-    curl -fsSL --max-time "$timeout" -o "$target" "$url" 2> /dev/null && return 0
+    curl -fsSL --connect-timeout 5 --max-time "$direct_timeout" -o "$target" "$url" 2> /dev/null && return 0
 
     command -v xray > /dev/null 2>&1 || return 1
     engine_answers 2> /dev/null || return 1
 
-    if curl -fsSL --max-time "$timeout" \
+    if curl -fsSL --connect-timeout 5 --max-time "$timeout" \
         --socks5-hostname "127.0.0.1:${XKOP_PROBE_PORT:-10809}" \
         -o "$target" "$url" 2> /dev/null; then
         log_info "список взят через движок: напрямую не отдался"
