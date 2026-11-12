@@ -406,7 +406,7 @@ service_bootstrap_network_restore() {
 }
 
 service_reconcile() {
-    local owner="${1:-}" generated changed=0
+    local owner="${1:-}" generated changed=0 subnets_ready=1
     service_wan_ready || return 1
     [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
     # Restore local delivery before any network operation can block on it.
@@ -473,18 +473,31 @@ service_reconcile() {
     # Optional source refresh must not hold a newly obtained subscription
     # behind slow list downloads. First make the core route usable, then
     # refresh cached lists once per boot and apply them if they changed.
-    if [ ! -f "$XKOP_RUN_DIR/startup-lists-checked" ]; then
+    if [ ! -f "$XKOP_RUN_DIR/startup-lists-checked" ] || ! lists_subnets_ready; then
         userlist_update_all > /dev/null 2>&1
-        lists_subnets_update > /dev/null 2>&1
+        if lists_subnets_ready; then
+            lists_subnets_update > /dev/null 2>&1
+        else
+            lists_subnets_update missing > /dev/null 2>&1
+        fi
         [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
         if [ -n "$owner" ] && [ "$(cat "$XKOP_RECOVERY_PID" 2>/dev/null)" != "$owner" ]; then return 1; fi
-        : > "$XKOP_RUN_DIR/startup-lists-checked"
+        if lists_subnets_ready; then
+            : > "$XKOP_RUN_DIR/startup-lists-checked"
+        else
+            rm -f "$XKOP_RUN_DIR/startup-lists-checked"
+            subnets_ready=0
+        fi
         if config_generate; then
             nft_apply || return 1
             return 2
         else
             generated=$?
             config_generated_ok "$generated" || return 1
+        fi
+        if [ "$subnets_ready" = 0 ]; then
+            log_warn "выбранные комьюнити-подсети ещё не загружены, повторю в фоне"
+            return 1
         fi
     fi
     return 0
@@ -772,7 +785,7 @@ service_init_action() {
 # и повторять сборку пула и запрос к эндпоинту незачем.
 service_status_json() {
     local nodes="${1:-}" answering_in="${2:-}"
-    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0 bootstrap=0 dns_ready=1
+    local enabled=0 running=0 answering=0 proxy_ready=0 routing_ready=0 wan_ready=0 pending=0 bootstrap=0 dns_ready=1 community_pending=0
 
     [ -x /etc/rc.d/S99xkop ] && enabled=1
     engine_process_running && running=1
@@ -795,6 +808,10 @@ service_status_json() {
     service_wan_ready && wan_ready=1
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || pending=1
     [ ! -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] || pending=1
+    if [ ! -f "$XKOP_RUN_DIR/service-stopped" ] && { [ "$running" = 1 ] || [ "$enabled" = 1 ]; } \
+        && command -v lists_subnets_ready > /dev/null 2>&1 && ! lists_subnets_ready; then
+        community_pending=1
+    fi
     if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] && [ ! -f "$XKOP_RUN_DIR/service-stopped" ]; then
         bootstrap=1; pending=1
     fi
@@ -806,6 +823,7 @@ service_status_json() {
         --argjson pending "$pending" \
         --argjson bootstrap "$bootstrap" \
         --argjson dns_ready "$dns_ready" \
+        --argjson community_pending "$community_pending" \
         --argjson config "$([ -f "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
         --argjson rules "$(nft_present && echo true || echo false)" \
         '{
@@ -815,10 +833,11 @@ service_status_json() {
             config_present: $config,
             nft_rules: $rules,
             nodes: $nodes,
-            routing_ready: ($routing_ready == 1 and $proxy_ready == 1 and $pending == 0 and $dns_ready == 1),
+            routing_ready: ($routing_ready == 1 and $proxy_ready == 1 and $pending == 0 and $dns_ready == 1 and $community_pending == 0),
             dns_ready: ($dns_ready == 1),
             config_pending: ($pending == 1),
-            lists_pending: ($bootstrap == 1),
+            lists_pending: ($bootstrap == 1 or $community_pending == 1),
+            community_lists_pending: ($community_pending == 1),
             wan_ready: ($wan_ready == 1),
             state: (
                 if ($dns_ready == 0) then "локальный DNS не отвечает"
@@ -827,6 +846,7 @@ service_status_json() {
                 elif ($running == 1) and ($answering == 1) and ($wan_ready == 0) then "ожидает WAN"
                 elif ($running == 1) and ($answering == 1) and ($proxy_ready == 0) then "движок запущен, ожидает серверы"
                 elif ($running == 1) and ($answering == 1) and ($pending == 1) then "применяется конфигурация"
+                elif ($running == 1) and ($answering == 1) and ($community_pending == 1) then "догружает комьюнити-списки"
                 elif ($running == 1) and ($answering == 1) and $rules and ($routing_ready == 1) then "работает"
                 elif ($running == 1) and ($answering == 1) and $rules then "не готовы правила маршрутизации"
                 elif ($running == 1) and ($answering == 0) then "движок запущен, но не отвечает"

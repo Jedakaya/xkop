@@ -7,6 +7,7 @@ trap 'rm -rf "$work"' EXIT
 XKOP_STATE_DIR="$work" XKOP_RUN_DIR="$work" XKOP_CONFIG_PATH="$work/config.json"
 . "$ROOT/xkop/files/usr/lib/xkop/service.sh"
 service_wan_ready() { return 0; }; lists_present() { return 0; }
+lists_subnets_ready() { return 0; }
 subscription_update_all() { : > "$work/updates"; }; userlist_update_all() { :; }; lists_subnets_update() { : > "$work/optional-sources"; }
 config_generate() { [ "$GEN" != 0 ] || : > "$work/config-reload.pending"; return "$GEN"; }
 config_generated_ok() { [ "$1" = 0 ] || [ "$1" = 2 ]; }

@@ -89,6 +89,22 @@ check "новый файл подсетей — изменение" "0" "$?"
 lists_subnets_update
 check "тот же файл второй раз — не изменение" "2" "$?"
 rm -rf "$(lists_subnet_dir)"
+# A failed cold download is not a completed update.
+lists_download() { return 1; }
+lists_subnets_update; rc=$?
+check "пустой кэш после отказа требует повтора" "1" "$rc"
+check "выбранные подсети ещё не готовы" no "$(lists_subnets_ready && echo yes || echo no)"
+lists_download() { printf '1.2.3.0/24\n' > "$2"; }
+lists_subnets_update
+check "следующая загрузка делает выбранные подсети готовыми" yes "$(lists_subnets_ready && echo yes || echo no)"
+lists_download() { return 1; }
+lists_subnets_update; rc=$?
+check "сбой сети с рабочим кэшем не требует изменения" "2" "$rc"
+check "сбой сети сохраняет готовность кэша" yes "$(lists_subnets_ready && echo yes || echo no)"
+lists_download() { : > "$work/unneeded-download"; return 1; }
+lists_subnets_update missing
+check "повтор не скачивает готовые файлы" no "$([ -f "$work/unneeded-download" ] && echo yes || echo no)"
+rm -rf "$(lists_subnet_dir)"
 unset -f uci
 
 # --- чтение кэша ----------------------------------------------------------

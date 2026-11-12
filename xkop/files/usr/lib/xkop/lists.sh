@@ -109,7 +109,7 @@ lists_subnet_fetch() {
     tmp="$XKOP_RUN_DIR/subnet-$name.lst"
 
     if ! lists_download "$XKOP_SUBNET_BASE/$name.lst" "$tmp" 60; then
-        [ -s "$target" ] && return 0
+        [ -s "$target" ] && return 3
         log_warn "подсети списка $category не скачались"
         return 1
     fi
@@ -118,7 +118,7 @@ lists_subnet_fetch() {
     # что и пользовательские списки: в файле должна быть хоть одна подсеть.
     if ! grep -q '^[0-9][0-9.]*/[0-9]' "$tmp" 2> /dev/null; then
         rm -f "$tmp"
-        [ -s "$target" ] && return 0
+        [ -s "$target" ] && return 3
         log_warn "в ответе для $category подсетей нет, файл не взят"
         return 1
     fi
@@ -166,20 +166,39 @@ lists_checked_at() {
     cat "$(lists_checked_path)" 2> /dev/null
 }
 
-lists_subnets_update() {
-    local profile category changed=0
-    command -v uci > /dev/null 2>&1 || return 2
-
+lists_selected_subnets() {
+    local profile category
     for profile in $(uci -q show "$XKOP_CONFIG" 2> /dev/null \
         | sed -n "s/^$XKOP_CONFIG\.\([^.]*\)=profile$/\1/p"); do
         for category in $(uci -q get "$XKOP_CONFIG.$profile.community_list" 2> /dev/null); do
-            lists_subnet_fetch "$category" && changed=1
+            lists_subnet_has "$category" && printf '%s\n' "$category"
         done
+    done | sort -u
+}
+
+lists_subnets_ready() {
+    local category
+    command -v uci > /dev/null 2>&1 || return 1
+    for category in $(lists_selected_subnets); do
+        grep -q '^[0-9][0-9.]*/[0-9]' "$(lists_subnet_path "$category")" 2>/dev/null || return 1
+    done
+    return 0
+}
+
+lists_subnets_update() {
+    local category changed=0
+    command -v uci > /dev/null 2>&1 || return 2
+
+    for category in $(lists_selected_subnets); do
+        if [ "${1:-}" = missing ] \
+            && grep -q '^[0-9][0-9.]*/[0-9]' "$(lists_subnet_path "$category")" 2>/dev/null; then continue; fi
+        lists_subnet_fetch "$category" && changed=1
     done
 
     # Отметка ставится независимо от того, изменилось ли что-нибудь: она
     # отвечает на вопрос «когда спрашивали», а не «когда поменялось».
     lists_mark_checked
+    lists_subnets_ready || return 1
 
     [ "$changed" -eq 1 ] && return 0
     return 2

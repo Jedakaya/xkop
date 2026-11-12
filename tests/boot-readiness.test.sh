@@ -20,6 +20,7 @@ log_info() { :; }; log_warn() { :; }; log_error() { :; }
 cron_install() { :; }; service_check_requirements() { return 0; }
 service_br_netfilter_disable() { :; }; service_sync_time() { :; }
 lists_present() { return 0; }; lists_update() { echo lists >> "$work/network"; }
+lists_subnets_ready() { return 0; }
 lists_refresh_background() { echo background >> "$work/network"; }
 userlist_update_all() { echo userlists >> "$work/network"; }
 subscription_update_all() { echo subscription >> "$work/network"; }

@@ -36,6 +36,18 @@ XKOP_LIB_DIR='/usr/lib/xkop'
 
 # Собрать конфигурацию движка из подписок и привязок. Отдаёт результат полем,
 # а не кодом возврата: «оставлена прежняя» — это не отказ команды.
+cmd_lists_update() {
+    local geosite=0 subnets=0
+    lists_update
+    lists_subnets_update
+    lists_present && geosite=1
+    lists_subnets_ready && subnets=1
+    jq -nc --arg path "$(lists_geosite_path)" --argjson geosite "$geosite" --argjson subnets "$subnets" \
+        '{ok: ($geosite==1 and $subnets==1),
+          result: (if $geosite==0 then "missing" elif $subnets==0 then "partial" else "present" end),
+          geosite_present: ($geosite==1), subnets_ready: ($subnets==1), path: $path}'
+}
+
 cmd_configure() {
     local rc reason
 
@@ -262,14 +274,7 @@ main() {
             cmd_subscription_userinfo
             ;;
         lists_update)
-            lists_update
-            lists_subnets_update
-            jq -nc \
-                --argjson present "$(lists_present && echo true || echo false)" \
-                --arg path "$(lists_geosite_path)" \
-                '{ok: $present,
-                  result: (if $present then "present" else "missing" end),
-                  path: $path}'
+            cmd_lists_update
             ;;
         explain)
             explain_domain "${1:-}"

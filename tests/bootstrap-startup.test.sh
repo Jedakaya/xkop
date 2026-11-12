@@ -11,6 +11,7 @@ log_info() { :; }; log_warn() { :; }; log_error() { :; }
 cron_install() { :; }; service_check_requirements() { return 0; }
 service_br_netfilter_disable() { :; }; service_sync_time() { :; }
 service_wan_ready() { return 0; }; lists_present() { return 1; }
+lists_subnets_ready() { return 0; }
 config_generate() { : > "$work/bootstrap.pending"; echo '{}' > "$XKOP_CONFIG_PATH"; return 0; }
 config_generated_ok() { [ "$1" = 0 ] || [ "$1" = 2 ]; }
 config_uci_get() { [ "$2" != dns_mode ] || echo fakeip; }
@@ -56,3 +57,10 @@ dnsmasq_verify() { return 1; }
 status=$(service_status_json)
 printf '%s' "$status" | jq -e '.dns_ready==false and .routing_ready==false and .state=="локальный DNS не отвечает"' >/dev/null || exit 1
 echo 'ok   dead local DNS is exposed in status'
+dnsmasq_verify() { return 0; }
+rm -f "$XKOP_RUN_DIR/service-stopped" "$XKOP_RUN_DIR/bootstrap.pending"
+engine_process_running() { return 0; }; engine_answers() { return 0; }
+service_proxy_ready() { return 0; }; lists_subnets_ready() { return 1; }
+status=$(service_status_json)
+printf '%s' "$status" | jq -e '.lists_pending==true and .community_lists_pending==true and .routing_ready==false and .state=="догружает комьюнити-списки"' >/dev/null || exit 1
+echo 'ok   missing community lists remain visible after the full engine starts'
