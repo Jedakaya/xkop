@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+# shellcheck shell=ash disable=SC2034
+# Opt-in service. Merely installing/upgrading Xkop does not enroll a router.
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+    [ -f /etc/xkop/fleet/enabled ] || return 0
+    procd_open_instance
+    procd_set_param command /usr/bin/xkop-fleet run
+    procd_set_param stdout 0
+    procd_set_param stderr 0
+    procd_set_param term_timeout 20
+    procd_close_instance
+}

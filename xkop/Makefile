@@ -49,9 +49,11 @@ define Package/xkop/install
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/xkop $(1)/etc/init.d/xkop
+	$(INSTALL_BIN) ./files/etc/init.d/xkop-fleet $(1)/etc/init.d/xkop-fleet
 
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ./files/usr/bin/xkop $(1)/usr/bin/xkop
+	$(INSTALL_BIN) ./files/usr/bin/xkop-fleet $(1)/usr/bin/xkop-fleet
 
 	$(INSTALL_DIR) $(1)/usr/lib/xkop
 	$(CP) ./files/usr/lib/xkop/* $(1)/usr/lib/xkop/
@@ -83,6 +85,11 @@ if [ -x /usr/bin/xkop ]; then
 	/usr/bin/xkop teardown || exit 1
 fi
 /etc/init.d/xkop stop 2>/dev/null || exit 1
+
+# The optional reporter must not survive package removal or replacement.
+if [ -x /etc/init.d/xkop-fleet ]; then
+	/etc/init.d/xkop-fleet stop 2>/dev/null || exit 1
+fi
 
 # Панель клиента — не файлы пакета, а отдельный экземпляр uhttpd, заведённый
 # нами в uci. Пакет его не унесёт: удаление пакета оставляло слушателя

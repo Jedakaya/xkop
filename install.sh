@@ -1051,13 +1051,15 @@ note "$XKOP_REPO @ $(echo "$SHA" | cut -c1-7)"
 if [ -z "$INSTALLED_FROM" ]; then
     say "файлы xkop"
     fetch_repo_file "xkop/files/usr/bin/xkop" "$WORK/xkop" || die "не удалось скачать xkop"
+    fetch_repo_file "xkop/files/usr/bin/xkop-fleet" "$WORK/xkop-fleet" || die "не удалось скачать xkop-fleet"
 
     # Список полный и обязательный: /usr/bin/xkop подключает библиотеки все,
     # и недостающая означает не «без одной возможности», а команду, которая
     # не запускается вовсе. Полнота списка проверяется в tests/installer.test.sh.
     XKOP_LIBS="constants.sh logging.sh lock.sh version.sh stats.sh stats.jq
 subscription.sh subscription.jq config.sh config.jq config-bootstrap.jq lists.sh userlists.sh
-nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh update.sh
+nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh update.sh fleet-update.sh fleet-native.sh fleet-manifest.jq fleet-jobs.sh
+fleet-install.sh fleet-transaction.sh fleet-guardian.sh fleet-health.sh fleet-guardian.init
 service.sh migrate.sh"
 
     for lib in $XKOP_LIBS; do
@@ -1067,12 +1069,18 @@ service.sh migrate.sh"
 
     fetch_repo_file "xkop/files/etc/init.d/xkop" "$WORK/init.d-xkop" \
         || die "не удалось скачать файл службы"
+    fetch_repo_file "xkop/files/etc/init.d/xkop-fleet" "$WORK/init.d-xkop-fleet" \
+        || die "не удалось скачать файл службы xkop-fleet"
 
     mkdir -p "$XKOP_LIB_DIR"
     cp "$WORK"/lib/* "$XKOP_LIB_DIR/"
     cp "$WORK/xkop" /usr/bin/xkop
     cp "$WORK/init.d-xkop" /etc/init.d/xkop
     chmod +x /usr/bin/xkop /etc/init.d/xkop
+    # Optional owner management is installed but not enrolled, enabled or started.
+    cp "$WORK/xkop-fleet" /usr/bin/xkop-fleet
+    cp "$WORK/init.d-xkop-fleet" /etc/init.d/xkop-fleet
+    chmod +x /usr/bin/xkop-fleet /etc/init.d/xkop-fleet
 
     # Что обязано пережить обновление прошивки. В пакете этот файл кладёт
     # Makefile; при установке с ветки его нужно положить руками, иначе

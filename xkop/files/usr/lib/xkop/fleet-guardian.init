@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+# shellcheck shell=ash disable=SC2034
+# Owner creates/enables this independent service, never package post-install.
+USE_PROCD=1
+START=94
+STOP=10
+start_service() {
+    local base=/etc/xkop/fleet
+    [ -f "$base/supervisor/runtime/lib/fleet-guardian.sh" ] || return 0
+    # Recovery remains permitted even if management was revoked mid-update.
+    [ -f "$base/allow-install" ] || [ -f "$base/supervisor/setup-pending" ] || [ -f "$base/transaction/journal.json" ] || return 0
+    procd_open_instance
+    procd_set_param command /bin/sh "$base/supervisor/runtime/lib/fleet-guardian.sh" serve
+    procd_set_param respawn 3600 5 0
+    procd_set_param term_timeout 5
+    procd_set_param stdout 0
+    procd_set_param stderr 0
+    procd_close_instance
+}

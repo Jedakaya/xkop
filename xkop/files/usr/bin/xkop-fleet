@@ -1,0 +1,219 @@
+#!/bin/sh
+# Optional outbound management. No default endpoint or VPN mutations.
+set -eu
+umask 077
+STATE=${XKOP_FLEET_DIR:-/etc/xkop/fleet}
+LOCK=${XKOP_FLEET_LOCK:-/tmp/xkop-fleet.lock}
+WORK=
+LOCKED=0
+
+cleanup() {
+    [ -z "$WORK" ] || rm -rf "$WORK"
+    if [ "$LOCKED" -eq 1 ]; then
+        rm -f "$LOCK/$$"
+        rmdir "$LOCK" 2>/dev/null || :
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+fail() { echo "xkop-fleet: $1" >&2; exit 1; }
+
+lock() {
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        # Give a new owner time to write its PID. Never recursively remove a lock:
+        # another process may already have replaced the dead owner.
+        sleep 1
+        for owner in "$LOCK"/*; do
+            [ -e "$owner" ] || continue
+            pid=${owner##*/}
+            case "$pid" in ''|*[!0-9]*) fail 'invalid management lock';; esac
+            if kill -0 "$pid" 2>/dev/null; then
+                fail 'another management operation is running; retry after it finishes'
+            fi
+            rm -f "$owner"
+        done
+        rmdir "$LOCK" 2>/dev/null || fail 'management operation is busy'
+        mkdir "$LOCK" 2>/dev/null || fail 'management operation is busy'
+    fi
+    : > "$LOCK/$$" || fail 'cannot claim management lock'
+    LOCKED=1
+    # Recovery can replace an empty directory between mkdir and PID publication.
+    # The last publisher must back off if another owner has already published;
+    # cleanup removes only our own marker, never the winner's directory.
+    for owner in "$LOCK"/*; do
+        [ "$owner" = "$LOCK/$$" ] || fail 'management operation is busy'
+    done
+    WORK=$(mktemp -d)
+}
+
+valid_url() {
+    case "$1" in
+        https://?*) ;;
+        *) return 1;;
+    esac
+    case "$1" in *[!a-zA-Z0-9:/._-]*) return 1;; esac
+    authority=${1#https://}
+    authority=${authority%%/*}
+    case "$authority" in ''|:*|.*|-*) return 1;; esac
+}
+
+random_hex() {
+    value=$(hexdump -v -n "$1" -e '1/1 "%02x"' /dev/urandom) || return 1
+    [ "${#value}" -eq "$(($1 * 2))" ] || return 1
+    printf '%s' "$value"
+}
+
+metadata() {
+    board=$(ubus -t 3 call system board 2>/dev/null || printf '{}')
+    version=$(sed -n "s/^XKOP_VERSION='\([^']*\)'.*/\1/p" "${XKOP_FLEET_CONSTANTS_FILE:-/usr/lib/xkop/constants.sh}" 2>/dev/null || :)
+    engine=$(xray version 2>/dev/null | head -n 1 | cut -c 1-128 || :)
+    package_arch=$(sed -n "s/^DISTRIB_ARCH='\([^']*\)'$/\1/p" "${XKOP_FLEET_RELEASE_FILE:-/etc/openwrt_release}" 2>/dev/null || :)
+    package_format=
+    installer=0
+    if [ -f "$STATE/allow-install" ] && [ ! -f "$STATE/supervisor/setup-pending" ] &&
+        [ -x /etc/init.d/xkop-fleet-guardian ] && /etc/init.d/xkop-fleet-guardian running >/dev/null 2>&1; then
+        installer=1
+    fi
+    if command -v apk >/dev/null 2>&1; then package_format=apk
+    elif command -v opkg >/dev/null 2>&1; then package_format=ipk; fi
+    # Only explicit version/model fields; never collect LAN clients or subscriptions.
+    printf '%s' "$board" | jq -c --arg xkop "$version" --arg xray "$engine" --arg pa "$package_arch" --arg pf "$package_format" --arg installer "$installer" '
+        {model: (.model // ""), openwrt: (.release.version // ""),
+         arch: (.release.target // ""), xkop: $xkop, xray: $xray, package_arch:$pa, package_format:$pf, installer:$installer}
+        | with_entries(.value |= (tostring | explode | map(select(. >= 32 and . != 127)) | implode | .[0:128]))'
+}
+
+load_identity() {
+    [ -f "$STATE/identity.json" ] || fail 'not enrolled'
+    endpoint=$(jq -er '.endpoint | strings' "$STATE/identity.json")
+    device_id=$(jq -er '.device_id | strings' "$STATE/identity.json")
+    secret=$(jq -er '.secret | strings' "$STATE/identity.json")
+    valid_url "$endpoint" || fail 'invalid stored endpoint'
+    case "$device_id$secret" in *[!a-f0-9]*) fail 'invalid stored credentials';; esac
+    [ "${#device_id}" -eq 32 ] && [ "${#secret}" -eq 64 ] || fail 'invalid stored credentials'
+}
+
+request() {
+    action=$1
+    credential=$2
+    # Private config avoids credentials in /proc/*/cmdline. curl -q ignores .curlrc.
+    printf 'header = "Authorization: Bearer %s"\n' "$credential" > "$WORK/curl.conf"
+    code=$(curl -q --config "$WORK/curl.conf" --proto '=https' --proto-redir '=https' \
+        --noproxy '*' --connect-timeout 5 --max-time 15 --max-filesize 4096 --silent \
+        --request POST --header 'Content-Type: application/json' \
+        --data-binary "@$WORK/payload.json" --output "$WORK/response.json" \
+        --write-out '%{http_code}' "$endpoint/v1/$action") || return 1
+    if [ "$code" = 401 ] && [ "$action" != enroll ]; then
+        rm -f "$STATE/enabled"
+        return 1
+    fi
+    [ "$code" = 200 ] || return 1
+    if [ "$action" = enroll ]; then
+        jq -e --arg id "$device_id" '.registered == true and .device_id == $id' "$WORK/response.json" >/dev/null 2>&1
+    else
+        jq -e '.accepted == true' "$WORK/response.json" >/dev/null 2>&1
+    fi
+}
+
+enroll() {
+    [ "$#" -eq 2 ] || fail 'usage: enroll HTTPS_URL INVITATION_FILE'
+    target=${1%/}
+    valid_url "$target" || fail 'an HTTPS endpoint without credentials or query is required'
+    [ -f "$2" ] || fail 'invitation file is required'
+    [ "$(wc -c < "$2")" -le 65 ] || fail 'invalid invitation'
+    invitation=$(cat "$2")
+    case "$invitation" in *[!a-f0-9]*) fail 'invalid invitation';; esac
+    [ "${#invitation}" -eq 64 ] || fail 'invalid invitation'
+    lock
+    mkdir -p "$STATE"
+    chmod 700 "$STATE"
+    if [ ! -f "$STATE/identity.json" ]; then
+        device_id=$(random_hex 16)
+        secret=$(random_hex 32)
+        # Persist identity before the request: safe retry when its response is lost.
+        # Secret enters jq on stdin, never via --arg/process arguments.
+        printf '%s' "$secret" | jq -Rsc --arg id "$device_id" --arg endpoint "$target" \
+            '{device_id:$id, secret:., endpoint:$endpoint}' > "$STATE/identity.json.new"
+        mv "$STATE/identity.json.new" "$STATE/identity.json"
+    fi
+    load_identity
+    [ "$target" = "$endpoint" ] || fail 'identity belongs to another endpoint; do not clone credentials'
+    metadata > "$WORK/metadata.json"
+    jq --slurpfile m "$WORK/metadata.json" '{device_id, secret, metadata:$m[0]}' \
+        "$STATE/identity.json" > "$WORK/payload.json"
+    request enroll "$invitation" || fail 'enrollment not confirmed; retry with the same invitation before expiry'
+    : > "$STATE/enabled"
+    echo 'xkop-fleet: enrolled; enable the separate xkop-fleet service to start polling'
+}
+
+heartbeat() {
+    # The default path exits before creating state, taking a lock or calling curl.
+    [ -f "$STATE/enabled" ] || return 0
+    lock
+    [ -f "$STATE/enabled" ] || return 0
+    load_identity
+    metadata > "$WORK/metadata.json"
+    jq --slurpfile m "$WORK/metadata.json" '{device_id, metadata:$m[0]}' \
+        "$STATE/identity.json" > "$WORK/payload.json"
+    request heartbeat "$secret"
+}
+
+case "${1:-}" in
+    enable-updates)
+        shift
+        # shellcheck source=/dev/null
+        . "${XKOP_FLEET_INSTALL_LIB:-/usr/lib/xkop/fleet-install.sh}"
+        fleet_install_enable "$@"
+        ;;
+    jobs)
+        # shellcheck source=/dev/null
+        . "${XKOP_FLEET_JOBS_LIB:-/usr/lib/xkop/fleet-jobs.sh}"
+        fleet_jobs_tick
+        ;;
+    check-update)
+        [ "$#" -eq 2 ] || fail 'usage: check-update SHA256'
+        update_lib=${XKOP_FLEET_UPDATE_LIB:-/usr/lib/xkop/fleet-update.sh}
+        # shellcheck source=/dev/null
+        . "$update_lib"
+        # shellcheck source=/dev/null
+        . "${update_lib%/*}/fleet-native.sh"
+        fleet_native_check "$2"
+        ;;
+    prepare)
+        [ "$#" -eq 3 ] || fail 'usage: prepare HTTPS_MANIFEST_URL SHA256'
+        # shellcheck source=/dev/null
+        . "${XKOP_FLEET_UPDATE_LIB:-/usr/lib/xkop/fleet-update.sh}"
+        fleet_update_prepare "$2" "$3"
+        ;;
+    enroll) shift; enroll "$@";;
+    heartbeat) heartbeat;;
+    disable)
+        # Serialize with enrollment; a successful disable must not be undone
+        # by an enrollment response already in flight.
+        lock
+        rm -f "$STATE/enabled"
+        ;;
+    run)
+        [ -f "$STATE/enabled" ] || exit 0
+        # shellcheck source=/dev/null
+        . "${XKOP_FLEET_INSTALL_LIB:-/usr/lib/xkop/fleet-install.sh}"
+        delay=60
+        while [ -f "$STATE/enabled" ]; do
+            fleet_install_refresh >/dev/null 2>&1 || :
+            # One-shot child owns its own lock and credentials, not the daemon.
+            if sh "$0" heartbeat >/dev/null 2>&1 && sh "$0" jobs >/dev/null 2>&1; then
+                delay=60
+            else
+                delay=$((delay * 2))
+                [ "$delay" -le 900 ] || delay=900
+            fi
+            [ -f "$STATE/enabled" ] || break
+            jitter=$(hexdump -n 1 -e '1/1 "%u"' /dev/urandom)
+            sleep $((delay + jitter % 16)) &
+            wait $!
+        done
+        ;;
+    *) fail 'usage: enroll HTTPS_URL INVITATION_FILE | enable-updates HEALTH_JSON | heartbeat | jobs | run | disable | prepare HTTPS_MANIFEST_URL SHA256 | check-update SHA256';;
+esac
