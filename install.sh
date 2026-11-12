@@ -84,11 +84,44 @@ run_bounded() {
 # отработает пакетный менеджер, значит отказать ровно тому роутеру, ради
 # которого этот скрипт и написан.
 download() {
+    local url="$1" target="$2" part="$2.part" err="$2.download.log" host resolver ip
+    local dnsfile="$2.dns" candidates="$2.addresses"
     if command -v curl > /dev/null 2>&1; then
-        curl -fsSL --max-time 300 -o "$2" "$1"
+        if curl -4 -fsSL --retry 1 --connect-timeout 8 --max-time 45 -o "$part" "$url" 2> "$err"; then
+            mv "$part" "$target"
+            return $?
+        fi
+        host=${url#https://}; host=${host%%/*}
+        case "$host" in
+            github.com | api.github.com | raw.githubusercontent.com | objects.githubusercontent.com | release-assets.githubusercontent.com)
+                for resolver in 1.1.1.1 77.88.8.8; do
+                    run_bounded 5 sh -c 'nslookup "$1" "$2" > "$3" 2>/dev/null' sh "$host" "$resolver" "$dnsfile"
+                    awk '/^Name:/ { answer=1 } answer && /^Address/ {
+                        ip=$NF; if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print ip
+                    }' "$dnsfile" 2>/dev/null | sort -u | head -n 2 > "$candidates"
+                    while read -r ip; do
+                        [ -n "$ip" ] || continue
+                        note "повтор загрузки $host через $ip (TLS проверяется)"
+                        if curl -4 -fsSL --connect-timeout 5 --max-time 30 \
+                            --resolve "$host:443:$ip" -o "$part" "$url" 2>> "$err"; then
+                            rm -f "$dnsfile" "$candidates"
+                            mv "$part" "$target"
+                            return $?
+                        fi
+                    done < "$candidates"
+                done
+                ;;
+        esac
     else
-        wget -q -O "$2" "$1"
+        if wget -T 20 -O "$part" "$url" 2> "$err"; then
+            mv "$part" "$target"
+            return $?
+        fi
     fi
+    rm -f "$part" "$dnsfile" "$candidates"
+    warn "не удалось скачать $url; причина: $err"
+    tail -n 4 "$err" >&2
+    return 1
 }
 
 # Перенято у podkop, где куплено настоящими отказами: когда провайдер травит
