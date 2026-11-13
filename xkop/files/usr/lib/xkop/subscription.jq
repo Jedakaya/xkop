@@ -19,6 +19,7 @@
 #   links  input is the raw text of a decoded link list (jq -R -s), output is
 #          {servers, skipped}
 #   merge  input is an array of pools, output is the deduplicated pool
+#   filter input is a cached pool, output respects current include/exclude
 
 def reserved_tags: ["direct", "block", "dns-out", "metrics-out", "resolver-out", "api"];
 
@@ -649,6 +650,8 @@ elif $mode == "links" then
     from_links($subscription) | .servers |= drop_placeholders
 elif $mode == "merge" then
     merge
+elif $mode == "filter" then
+    apply_filters
 else
     error("unknown mode: \($mode)")
 end

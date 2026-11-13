@@ -257,7 +257,12 @@ subscription_pool() {
     local file
     file="$(subscription_dir "$1")/pool.json"
     if [ -s "$file" ]; then
-        cat "$file"
+        # Cached pools may predate an edited filter. Restrict every consumer
+        # immediately; a later successful refresh can recover missing nodes.
+        jq -c --arg mode filter --arg subscription "$1" --arg format "" \
+            --arg include "$(uci -q get "${XKOP_CONFIG:-xkop}.$1.include" 2>/dev/null)" \
+            --arg exclude "$(uci -q get "${XKOP_CONFIG:-xkop}.$1.exclude" 2>/dev/null)" \
+            -f "$XKOP_LIB_DIR/subscription.jq" "$file" 2>/dev/null || echo '[]'
     else
         echo '[]'
     fi
@@ -677,10 +682,24 @@ subscription_update_locked() {
         rm -rf "$work"
         return 1
     fi
+    # Record only the filters used by this successful download, after the pool
+    # is published. A failure leaves refresh due; never acknowledge new filters
+    # while the cache still contains a subset produced by older ones.
+    if ! { jq -nc --arg include "$include" --arg exclude "$exclude" \
+        '{include:$include,exclude:$exclude}' > "$dir/filters.json.tmp" \
+        && mv "$dir/filters.json.tmp" "$dir/filters.json"; }; then
+        rm -f "$dir/filters.json.tmp"
+        subscription_write_meta "$id" stale cache_write_failed "$now" "$count" "$agents_meta"
+        rm -rf "$work"
+        return 1
+    fi
     rm -f "$dir/rejected"
     chmod 600 "$dir"/* 2> /dev/null || true
 
-    subscription_write_meta "$id" "ready" "" "$now" "$count" "$agents_meta" || return 1
+    if ! subscription_write_meta "$id" "ready" "" "$now" "$count" "$agents_meta"; then
+        rm -rf "$work"
+        return 1
+    fi
     rm -rf "$work"
     return 0
 }
@@ -800,7 +819,13 @@ subscription_interval_seconds() {
 # Whether it is time to ask again. The schedule belongs to the subscription,
 # and the cron job only wakes up often enough to notice.
 subscription_due() {
-    local id="$1" interval updated now
+    local id="$1" interval updated now filters
+
+    filters=$(jq -nc \
+        --arg include "$(uci -q get "$XKOP_CONFIG.$id.include" 2>/dev/null)" \
+        --arg exclude "$(uci -q get "$XKOP_CONFIG.$id.exclude" 2>/dev/null)" \
+        '{include:$include,exclude:$exclude}') || return 0
+    [ "$filters" = "$(cat "$(subscription_dir "$id")/filters.json" 2>/dev/null)" ] || return 0
 
     interval=$(subscription_interval_seconds "$(uci -q get "$XKOP_CONFIG.$id.update_interval" 2> /dev/null)")
     updated=$(subscription_meta "$id" | jq -r '.updated_at // 0' 2> /dev/null)

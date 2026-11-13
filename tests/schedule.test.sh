@@ -81,6 +81,8 @@ check "пустой пул — пора, несмотря на расписан�
 printf '{"subscription":"main","state":"ready","updated_at":%s,"servers":5}' "$now" \
     > "$XKOP_CACHE_DIR/main/meta.json"
 printf '[{"tag":"a"},{"tag":"b"}]' > "$XKOP_CACHE_DIR/main/pool.json"
+check "старый кэш без сведений о фильтрах обновляется" "yes" "$(subscription_due main && echo yes || echo no)"
+printf '{"include":"","exclude":""}' > "$XKOP_CACHE_DIR/main/filters.json"
 check "свежая подписка не спрашивается заново" "no" "$(subscription_due main && echo yes || echo no)"
 
 # Прошёл интервал — пора.

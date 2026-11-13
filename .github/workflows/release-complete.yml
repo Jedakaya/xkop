@@ -22,6 +22,20 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+      - name: Prepare pinned native package inspector
+        run: |
+          set -eu
+          inspector="$RUNNER_TEMP/xkop-apk-inspector"
+          mkdir -p "$inspector"
+          curl -q -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
+            https://dl-cdn.alpinelinux.org/alpine/edge/main/x86_64/apk-tools-static-3.0.9-r0.apk \
+            -o "$inspector/apk-static.tar.gz"
+          printf '%s  %s\n' 677dddb435ca7d621ce9f8a1a404a4cedc631651fd025893c548c34a4ceecb19 \
+            "$inspector/apk-static.tar.gz" | sha256sum -c -
+          tar -xzf "$inspector/apk-static.tar.gz" -C "$inspector" sbin/apk.static
+          echo "APK_TOOL=$inspector/sbin/apk.static" >> "$GITHUB_ENV"
+      - name: Test native metadata inspection
+        run: python3 tests/release_metadata.py -v
       - name: Verify both builds and complete assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
