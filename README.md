@@ -44,16 +44,18 @@ Xkop содержит необязательный агент `xkop-fleet`. Са
 ### Обычная установка
 
 ```sh
-sh <(wget -O - https://github.com/Jedakaya/xkop/releases/latest/download/install.sh)
+curl -4 -fL --connect-timeout 8 --max-time 60 -o /tmp/xkop-install.sh https://github.com/Jedakaya/xkop/releases/latest/download/install.sh && sh /tmp/xkop-install.sh
 ```
 
 Установщик берётся из релиза, а не с ветки, намеренно: `raw.githubusercontent`
 отдаёт файл с пограничного кэша и параметры запроса игнорирует, поэтому
-исправленный скрипт ещё несколько минут приезжает старым. Файл релиза привязан
-к тегу и подменён быть не может.
+исправленный скрипт ещё несколько минут приезжает старым. В релизе публикуется
+проверенный комплект пакетов и установщик.
 
-Если соединение с `github.com` зависает, установщик можно получить через другой
-домен. Сам Xkop и движок он по-прежнему устанавливает пакетами из релиза:
+Если `curl` ещё не установлен или загрузка с `github.com` зависает, установщик
+можно получить через другой домен. На некоторых сборках OpenWrt `wget`
+(uclient-fetch) зависает там, где `curl` на том же роутере работает. Сам Xkop и
+движок установщик по-прежнему устанавливает пакетами из релиза:
 
 ```sh
 wget -T 20 -O /tmp/xkop-install.sh https://raw.githubusercontent.com/Jedakaya/xkop/main/install.sh && sh /tmp/xkop-install.sh

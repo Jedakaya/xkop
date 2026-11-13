@@ -971,10 +971,12 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
             ENGINE_WANT=$(engine_version_core "$(engine_url_version "$ENGINE_URL")")
             if [ -n "$ENGINE_HAVE" ] && [ "$ENGINE_HAVE" = "$ENGINE_WANT" ]; then
                 note "движок $ENGINE_HAVE уже стоит, не качаю"
-                ENGINE_URL=""
+                ENGINE_SKIP=1
+            else
+                ENGINE_SKIP=0
             fi
 
-            if [ -n "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
+            if [ -n "$ENGINE_URL" ] && [ "$ENGINE_SKIP" != "1" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
                 if download "$ENGINE_URL" "$WORK/engine.$FORMAT"; then
                     # Движок, положенный мимо менеджера, мешает пакету встать,
                     # но убирать его насовсем до установки нельзя: отказ пакета
@@ -1004,7 +1006,7 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
                         rm -f "$saved_engine"
                     fi
                 fi
-            elif [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
+            elif [ -z "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
                 warn "пакета движка под $ARCH в релизе нет"
             fi
 
