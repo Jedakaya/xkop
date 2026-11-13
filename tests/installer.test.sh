@@ -60,7 +60,7 @@ check "установщик сбрасывает кэш LuCI" "yes" \
 
 # Файлы панели никого не обслуживают сами по себе.
 check "установщик поднимает панель" "yes" \
-    "$(grep -q 'listen_http=' "$ROOT/install.sh" && echo yes || echo no)"
+    "$(grep -q 'panel_tls_configure ' "$ROOT/install.sh" && echo yes || echo no)"
 
 # Функция в файле службы обязана быть хуком, который rc.common вызывает.
 #
@@ -276,7 +276,7 @@ check "удаление пакета уносит панель" "yes"     "$(gre
 
 cli="$ROOT/xkop/files/usr/bin/xkop"
 check "prepare не обёрнут в пропускающий замок" "no"     "$(grep -A 2 'prepare)' "$cli" | grep -q 'lock_run work' && echo yes || echo no)"
-check "prepare ждёт замок, но работает в любом случае" "yes"     "$(grep -A 14 'prepare)' "$cli" | grep -q 'lock_run_anyway' && echo yes || echo no)"
+check "prepare использует сериализацию с фоновым восстановлением" "yes"     "$(grep -A 14 'prepare)' "$cli" | grep -q 'service_prepare_serialized' && echo yes || echo no)"
 check "configure тоже не пропускается" "no"     "$(grep -A 4 'configure)' "$cli" | grep -q 'lock_run work' && echo yes || echo no)"
 
 # --- тонкости OpenWrt, вычитанные из его же исходников ----------------------

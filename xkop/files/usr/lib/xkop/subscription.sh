@@ -18,20 +18,58 @@
 
 XKOP_LINK_SCHEME_REGEX='^(socks4a?|socks5?|vless|vmess|ss|trojan|hysteria2|hy2)://'
 
+# Bounded settings also work with the regex-less jq shipped by OpenWrt.
+subscription_limit() {
+    local value
+    value=$(uci -q get "${XKOP_CONFIG:-xkop}.settings.$1" 2> /dev/null)
+    case "$value" in ''|*[!0-9]*|0*|??????????*) value="$2" ;; esac
+    [ "$value" -ge "$3" ] && [ "$value" -le "$4" ] || value="$2"
+    printf '%s' "$value"
+}
+
+subscription_clock() {
+    local seconds rest
+    if read -r seconds rest < /proc/uptime 2> /dev/null; then
+        printf '%s' "${seconds%%.*}"
+    else
+        date +%s
+    fi
+}
+
+# Cap stdout while it is produced, not after it exhausted tmpfs. Save the
+# producer status separately: POSIX sh has no portable pipefail.
+subscription_bounded_output() {
+    local outfile="$1" limit="$2" status bytes rc output_rc
+    shift 2
+    status=$(mktemp "$outfile.status.XXXXXX") || return 1
+    ( "$@"; printf '%s' "$?" > "$status" ) | head -c "$((limit + 1))" > "$outfile"
+    output_rc=$?
+    rc=$(cat "$status" 2> /dev/null)
+    rm -f "$status"
+    bytes=$(wc -c < "$outfile" 2> /dev/null) || bytes="$((limit + 1))"
+    if [ "$output_rc" -ne 0 ] || [ "$rc" != 0 ] || [ "$bytes" -gt "$limit" ]; then
+        rm -f "$outfile"
+        return 1
+    fi
+}
+
 # Some providers gzip the body no matter what Accept-Encoding said, and curl
 # neither asks for it nor unpacks it. Without this the payload reaches format
 # detection as opaque binary and the reported reason names the wrong problem.
 subscription_decompress_gzip() {
-    local file="$1" tmpfile
+    local file="$1" tmpfile magic limit
 
     [ -s "$file" ] || return 0
-    gzip -t "$file" 2> /dev/null || return 0
+    magic=$(hexdump -n 2 -e '1/1 "%02x"' "$file") || return 1
+    [ "$magic" = 1f8b ] || return 0
+    limit=$(subscription_limit subscription_max_bytes 8388608 1024 67108864)
 
     tmpfile="$file.gunzip.$$"
-    if gzip -dc "$file" > "$tmpfile" 2> /dev/null && [ -s "$tmpfile" ]; then
+    if subscription_bounded_output "$tmpfile" "$limit" gzip -dc "$file" 2> /dev/null && [ -s "$tmpfile" ]; then
         mv "$tmpfile" "$file"
     else
         rm -f "$tmpfile"
+        return 1
     fi
 }
 
@@ -414,10 +452,22 @@ subscription_panel() {
 # поддерживается или выключена отправка HWID". With them the same URL and the
 # same User-Agent return the real list. A subscription that looks empty is
 # almost always this.
-subscription_fetch_one() {
-    local url="$1" agent="$2" outfile="$3" headers="$4"
+# Header output is a separate file and also needs a cap. ulimit units differ
+# between ash and bash; 64 bounds it to at most 64 KiB on either shell.
+subscription_curl() (
+    ulimit -f 64 || exit 1
+    curl "$@"
+)
 
-    curl -fsSL --compressed --max-time 60 --retry 2 --retry-delay 2 \
+subscription_fetch_one() {
+    local url="$1" agent="$2" outfile="$3" headers="$4" limit remaining deadline
+    limit=$(subscription_limit subscription_max_bytes 8388608 1024 67108864)
+    deadline=${XKOP_SUBSCRIPTION_DEADLINE:-$(( $(subscription_clock) + 30 ))}
+    remaining=$((deadline - $(subscription_clock)))
+    [ "$remaining" -gt 0 ] || return 1
+    [ "$remaining" -le 30 ] || remaining=30
+    if subscription_bounded_output "$outfile" "$limit" subscription_curl \
+        -fsSL --compressed --connect-timeout 8 --max-time "$remaining" --max-filesize "$limit" \
         -A "$agent" \
         -H "X-HWID: $(subscription_hwid)" \
         -H "X-Device-OS: OpenWrt Linux" \
@@ -425,15 +475,33 @@ subscription_fetch_one() {
         -H "X-Ver-OS: $(uname -r)" \
         -H "Accept-Language: ru-RU,en,*" \
         -H "X-Device-Locale: EN" \
-        -D "$headers" -o "$outfile" "$url" 2> /dev/null
+        -D "$headers" -o - "$url" 2> /dev/null; then
+        return 0
+    fi
+    rm -f "$outfile" "$headers"
+    return 1
 }
 
 # The refresh itself. Every failure path here is written so that the router
 # ends up no worse than it started: a bad answer never replaces a good cache,
 # and a subscription that cannot be reached keeps serving what it already has.
-subscription_update() {
+subscription_update() (
+    # Scope signal handlers and deadline to this one refresh, not its caller.
+    id="${1:-}"
+    case "$id" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
+    umask 077
+    lock_acquire "subscription-$id" || return 0
+    work=''
+    trap '[ -z "$work" ] || rm -rf "$work"; lock_release "subscription-$id"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    XKOP_SUBSCRIPTION_DEADLINE=$(( $(subscription_clock) + $(subscription_limit subscription_timeout 90 10 600) ))
+    subscription_update_locked "$id"
+)
+
+subscription_update_locked() {
     local id="$1"
-    local url enabled include exclude dir work agents_file
+    local url enabled include exclude dir agents_file max_nodes max_total total_bytes=0 bytes max_sources resource_failed=0
     local agent n=0 ok=0 failed=0 fmt pool servers
     local merged count old_count fingerprint rejected now
     local agents_meta='[]'
@@ -459,9 +527,10 @@ subscription_update() {
 
     mkdir -p "$dir" "$XKOP_RUN_DIR"
     chmod 700 "$dir" 2> /dev/null || true
-    work="$XKOP_RUN_DIR/subscription-$id"
-    rm -rf "$work"
-    mkdir -p "$work"
+    work=$(mktemp -d "$XKOP_RUN_DIR/subscription-$id.XXXXXX") || return 1
+    max_nodes=$(subscription_limit subscription_max_nodes 2048 1 16384)
+    max_total=$(subscription_limit subscription_total_bytes 16777216 1024 134217728)
+    max_sources=$(subscription_limit subscription_max_sources 8 1 32)
 
     # One line per source: what to ask with, and what to ask for. By default
     # the agent is ours and the paths differ; a subscription may add agents of
@@ -479,8 +548,10 @@ subscription_update() {
 
     while IFS="$(printf '\t')" read -r agent source_url; do
         [ -n "$agent" ] || continue
+        [ "$(subscription_clock)" -lt "$XKOP_SUBSCRIPTION_DEADLINE" ] || break
         [ -n "$source_url" ] || source_url="$url"
         n=$((n + 1))
+        if [ "$n" -gt "$max_sources" ]; then resource_failed=1; break; fi
 
         if ! subscription_fetch_one "$source_url" "$agent" "$work/ua-$n.payload" "$work/ua-$n.headers"; then
             failed=$((failed + 1))
@@ -490,13 +561,25 @@ subscription_update() {
             continue
         fi
 
-        subscription_decompress_gzip "$work/ua-$n.payload"
+        if ! subscription_decompress_gzip "$work/ua-$n.payload"; then
+            failed=$((failed + 1))
+            rm -f "$work/ua-$n.payload"
+            continue
+        fi
         fmt=$(subscription_detect_format "$work/ua-$n.payload")
         pool=$(subscription_pool_of "$work/ua-$n.payload" "$fmt" "$id")
         [ -n "$pool" ] || pool='[]'
         printf '%s' "$pool" > "$work/pool-$n.json"
         servers=$(printf '%s' "$pool" | jq 'length' 2> /dev/null)
         [ -n "$servers" ] || servers=0
+        bytes=$(wc -c < "$work/ua-$n.payload")
+        total_bytes=$((total_bytes + bytes))
+        bytes=$(wc -c < "$work/pool-$n.json")
+        total_bytes=$((total_bytes + bytes))
+        if [ "$servers" -gt "$max_nodes" ] || [ "$total_bytes" -gt "$max_total" ]; then
+            resource_failed=1
+            break
+        fi
 
         ok=$((ok + 1))
         agents_meta=$(printf '%s' "$agents_meta" | jq -c \
@@ -508,6 +591,13 @@ subscription_update() {
             subscription_save_panel "$work/ua-$n.headers" "$id"
         fi
     done < "$agents_file"
+
+    if [ "$resource_failed" -eq 1 ]; then
+        subscription_write_meta "$id" "$([ "$old_count" -gt 0 ] && echo stale || echo rejected)" \
+            resource_limit "$now" "$old_count" "$agents_meta"
+        rm -rf "$work"
+        return 0
+    fi
 
     if [ "$ok" -eq 0 ]; then
         # Nothing arrived. The cache is left exactly as it was.
@@ -527,6 +617,13 @@ subscription_update() {
     [ -n "$merged" ] || merged='[]'
     count=$(printf '%s' "$merged" | jq 'length' 2> /dev/null)
     [ -n "$count" ] || count=0
+
+    if [ "$count" -gt "$max_nodes" ]; then
+        subscription_write_meta "$id" "$([ "$old_count" -gt 0 ] && echo stale || echo rejected)" \
+            resource_limit "$now" "$old_count" "$agents_meta"
+        rm -rf "$work"
+        return 0
+    fi
 
     fingerprint=$(cat "$work"/ua-*.payload 2> /dev/null | md5sum | cut -d' ' -f1)
     rejected=$(cat "$dir/rejected" 2> /dev/null)
@@ -564,16 +661,26 @@ subscription_update() {
 
     # Only here, with servers in hand, is the cache replaced - and by moving
     # files into place, never by writing over the ones in use.
+    ok=1
     for f in "$work"/ua-*.payload; do
         [ -f "$f" ] || continue
-        cp "$f" "$dir/$(basename "$f").tmp" && mv "$dir/$(basename "$f").tmp" "$dir/$(basename "$f")"
+        if ! { cp "$f" "$dir/$(basename "$f").tmp" && mv "$dir/$(basename "$f").tmp" "$dir/$(basename "$f")"; }; then
+            ok=0
+            break
+        fi
     done
-    printf '%s' "$merged" > "$dir/pool.json.tmp" && mv "$dir/pool.json.tmp" "$dir/pool.json"
-    printf '%s' "$url" > "$dir/url.tmp" && mv "$dir/url.tmp" "$dir/url"
+    if [ "$ok" -ne 1 ] || ! { printf '%s' "$url" > "$dir/url.tmp" && mv "$dir/url.tmp" "$dir/url" \
+        && printf '%s' "$merged" > "$dir/pool.json.tmp" && mv "$dir/pool.json.tmp" "$dir/pool.json"; }; then
+        subscription_write_meta "$id" "$([ "$old_count" -gt 0 ] && echo stale || echo empty)" \
+            cache_write_failed "$now" "$old_count" "$agents_meta"
+        rm -f "$dir/pool.json.tmp" "$dir/url.tmp" "$dir"/ua-*.payload.tmp
+        rm -rf "$work"
+        return 1
+    fi
     rm -f "$dir/rejected"
     chmod 600 "$dir"/* 2> /dev/null || true
 
-    subscription_write_meta "$id" "ready" "" "$now" "$count" "$agents_meta"
+    subscription_write_meta "$id" "ready" "" "$now" "$count" "$agents_meta" || return 1
     rm -rf "$work"
     return 0
 }
@@ -587,7 +694,7 @@ subscription_write_meta() {
     updated=$(subscription_meta "$id" | jq -r '.updated_at // empty' 2> /dev/null)
     [ "$state" = "ready" ] && updated="$now"
 
-    jq -nc \
+    if ! jq -nc \
         --arg id "$id" --arg state "$state" --arg reason "$reason" \
         --argjson tried "$now" --argjson servers "$servers" --argjson agents "$agents" \
         --arg updated "$updated" \
@@ -599,7 +706,14 @@ subscription_write_meta() {
             updated_at: (if $updated == "" then null else ($updated | tonumber) end),
             servers: $servers,
             agents: $agents
-        }' > "$dir/meta.json.tmp" && mv "$dir/meta.json.tmp" "$dir/meta.json"
+        }' > "$dir/meta.json.tmp"; then
+        rm -f "$dir/meta.json.tmp"
+        return 1
+    fi
+    if ! mv "$dir/meta.json.tmp" "$dir/meta.json"; then
+        rm -f "$dir/meta.json.tmp"
+        return 1
+    fi
     chmod 600 "$dir/meta.json" 2> /dev/null || true
 }
 

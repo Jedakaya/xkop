@@ -196,3 +196,4 @@ jobs:
         with:
           files: ./release/*
           tag_name: ${{ github.ref_name }}
+          draft: true

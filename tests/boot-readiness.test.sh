@@ -10,6 +10,10 @@ XKOP_CACHE_DIR="$work/cache"
 XKOP_CONFIG_PATH="$work/config.json"
 mkdir -p "$XKOP_STATE_DIR" "$XKOP_RUN_DIR" "$XKOP_CACHE_DIR"
 . "$ROOT/xkop/files/usr/lib/xkop/service.sh"
+# Bundle persistence is exercised by runtime-bundle.test.sh.
+service_runtime_save() { return 0; }
+service_dns_apply() { return 0; }
+log_warn() { :; }; log_error() { :; }
 failed=0
 check() {
  if [ "$2" = "$3" ]; then echo "ok   $1"; else

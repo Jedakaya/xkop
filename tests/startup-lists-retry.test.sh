@@ -6,6 +6,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 XKOP_STATE_DIR="$work" XKOP_RUN_DIR="$work" XKOP_CONFIG_PATH="$work/config.json"
 . "$ROOT/xkop/files/usr/lib/xkop/service.sh"
+# Bundle persistence is exercised by runtime-bundle.test.sh.
+service_runtime_save() { echo '{}' > "$(service_runtime_path)"; }
+service_dns_apply() { return 0; }
+log_warn() { :; }; log_error() { :; }
 service_wan_ready() { return 0; }; lists_present() { return 0; }
 subscription_update_all() { :; }; userlist_update_all() { :; }
 lists_subnets_update() { echo attempt >> "$work/attempts"; }

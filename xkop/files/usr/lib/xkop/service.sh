@@ -157,18 +157,26 @@ engine_version_cached() {
 # Proof, not assumption: the metrics endpoint answers only when the engine is
 # up and running our configuration. A pid says nothing about which one.
 engine_answers() {
-    curl -fsS -m 2 -o /dev/null "http://$XKOP_METRICS_HOST:$(metrics_port)$XKOP_METRICS_PATH" 2> /dev/null
+    curl -fsS -m "${1:-2}" -o /dev/null "http://$XKOP_METRICS_HOST:$(metrics_port)$XKOP_METRICS_PATH" 2> /dev/null
+}
+
+service_monotime() {
+    local uptime rest
+    if read -r uptime rest < /proc/uptime; then printf '%s' "${uptime%.*}"; else date +%s; fi
 }
 
 engine_wait() {
-    local deadline=${1:-15} waited=0
-
-    while [ "$waited" -lt "$deadline" ]; do
-        engine_answers && return 0
+    local deadline remaining timeout
+    deadline=$(($(service_monotime) + ${1:-15}))
+    while :; do
+        remaining=$((deadline - $(service_monotime)))
+        [ "$remaining" -gt 0 ] || return 1
+        timeout=2
+        [ "$remaining" -ge 2 ] || timeout="$remaining"
+        engine_answers "$timeout" && return 0
+        [ "$(service_monotime)" -lt "$deadline" ] || return 1
         sleep 1
-        waited=$((waited + 1))
     done
-    return 1
 }
 
 # Everything that has to happen before the engine is started, in the order it
@@ -284,6 +292,104 @@ service_check_requirements() {
     return 0
 }
 
+# A single atomic file binds validated engine JSON to its exact firewall and
+# DNS intent. Never reconstruct last-good routing from possibly edited UCI.
+service_runtime_path() { printf '%s/runtime-good.json' "$XKOP_STATE_DIR"; }
+
+service_dns_settings() {
+    jq -nc --arg mode "$(config_uci_get settings dns_mode)" \
+        --arg untouched "$(config_uci_get settings dont_touch_dhcp)" \
+        --arg https "$(config_uci_get settings block_https_records)" \
+        --arg ptr "$(config_uci_get settings block_ptr_records)" \
+        --arg canary "$(config_uci_get settings block_firefox_canary)" \
+        '{mode:$mode, untouched:$untouched, https:$https, ptr:$ptr, canary:$canary}'
+}
+
+service_dns_apply() {
+    local settings="$1"
+    if [ "$(printf '%s' "$settings" | jq -r .mode)" = fakeip ]; then
+        dnsmasq_configure "$(printf '%s' "$settings" | jq -r '.untouched // "0"')" || return 1
+    else
+        dnsmasq_restore || return 1
+    fi
+    dnsmasq_protection "$(printf '%s' "$settings" | jq -r 'if .https == "1" then "1" else "0" end')" \
+        "$(printf '%s' "$settings" | jq -r 'if .ptr == "1" then "1" else "0" end')" \
+        "$(printf '%s' "$settings" | jq -r 'if .canary == "1" then "1" else "0" end')"
+}
+
+service_runtime_save() (
+    umask 077
+    local destination tmp
+    destination="$XKOP_STATE_DIR/runtime-pending.json"
+    tmp=$(mktemp "$XKOP_STATE_DIR/runtime.XXXXXX") || return 1
+    trap 'rm -f "$tmp"' EXIT
+    jq -nc --slurpfile config "$XKOP_CONFIG_PATH" --rawfile nft "$XKOP_RUN_DIR/nft-active.rules" \
+        --argjson dns "$1" '{config:$config[0], nft:$nft, dns:$dns}' > "$tmp" \
+        && mv "$tmp" "$destination"
+)
+
+# Only a responding new process loading the exact startup snapshot can
+# promote a candidate. Validation alone is not proof the engine started.
+service_runtime_confirm() {
+    local pending="$XKOP_STATE_DIR/runtime-pending.json"
+    [ -s "$pending" ] || return 0
+    engine_answers || return 1
+    jq -e --slurpfile current "$XKOP_CONFIG_PATH" \
+        --slurpfile loaded "$XKOP_RUN_DIR/starting-config.json" \
+        '.config == $current[0] and .config == $loaded[0]' "$pending" >/dev/null || return 1
+    mv "$pending" "$(service_runtime_path)"
+}
+
+service_runtime_failed() {
+    [ -s "$XKOP_STATE_DIR/runtime-pending.json" ] && [ -s "$(service_runtime_path)" ] || return 1
+    : > "$XKOP_RUN_DIR/runtime-rollback.pending" || return 1
+    service_runtime_restore
+}
+
+service_runtime_restore() (
+    umask 077
+    local bundle tmp result=0 settings
+    bundle=$(service_runtime_path)
+    [ -s "$bundle" ] || return 1
+    tmp=$(mktemp -d "$XKOP_RUN_DIR/runtime.XXXXXX") || return 1
+    trap 'rm -rf "$tmp"' EXIT
+    jq -e '.config | select(type == "object")' "$bundle" > "$tmp/config" \
+        && jq -er '.nft | select(type == "string" and length > 0)' "$bundle" > "$tmp/nft" \
+        && config_validate "$tmp/config" || return 1
+    settings=$(jq -ec '.dns | select(type == "object")' "$bundle") || return 1
+    # Restore the file even if nft repair fails: the previous transaction is
+    # still installed and procd must not load the rejected new network mode.
+    cp "$tmp/config" "$XKOP_CONFIG_PATH.tmp" && mv "$XKOP_CONFIG_PATH.tmp" "$XKOP_CONFIG_PATH" || return 1
+    nft_replace "$tmp/nft" && nft_routing_rule || result=1
+    service_dns_apply "$settings" || result=1
+    [ "$result" != 0 ] || cp "$tmp/nft" "$XKOP_RUN_DIR/nft-active.rules" || return 1
+    rm -f "$XKOP_STATE_DIR/runtime-pending.json"
+    return "$result"
+)
+
+service_network_apply() {
+    local settings
+    settings=$(service_dns_settings) || return 1
+    if nft_apply && service_dns_apply "$settings" && service_runtime_save "$settings"; then
+        return 0
+    fi
+    log_warn "новая сеть не применена, восстанавливаю согласованную конфигурацию"
+    service_runtime_restore || log_error "не удалось полностью восстановить прежнюю сеть"
+    return 1
+}
+
+# Arm recovery before waiting for a writer. A restart's stop marker must not
+# make a deferred startup permanently invisible to the background worker.
+service_prepare_serialized() {
+    local result
+    mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" || return 1
+    rm -f "$XKOP_RUN_DIR/service-stopped"
+    cron_install
+    if lock_run_anyway work service_prepare; then return 0; else result=$?; fi
+    if [ "$result" = 75 ]; then recovery_start; fi
+    return "$result"
+}
+
 service_prepare() {
     mkdir -p "$XKOP_RUN_DIR" "$XKOP_STATE_DIR" "$XKOP_CACHE_DIR"
     rm -f "$XKOP_RUN_DIR/service-stopped"
@@ -293,6 +399,10 @@ service_prepare() {
     cron_install
 
     service_check_requirements || return 1
+    if [ -f "$XKOP_RUN_DIR/runtime-rollback.pending" ]; then
+        service_runtime_restore
+        return $?
+    fi
     service_br_netfilter_disable
     service_sync_time
     if service_wan_ready; then
@@ -313,12 +423,12 @@ service_prepare() {
     if config_generated_ok "$?"; then
         :
     else
-        if [ -f "$XKOP_CONFIG_PATH" ]; then
-            log_warn "новая конфигурация не принята, работаю на прежней"
-        else
-            log_error "конфигурации нет и собрать её не удалось, движку нечего запускать"
-            return 1
+        if service_runtime_restore; then
+            log_warn "новая конфигурация не принята, восстановлена прежняя сеть"
+            return 0
         fi
+        log_error "новая конфигурация отклонена, согласованной резервной сети нет"
+        return 1
     fi
 
     if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then
@@ -327,17 +437,7 @@ service_prepare() {
         return 0
     fi
 
-    nft_apply || log_warn "правила nft не применены, трафик в движок не пойдёт"
-
-    # Резолвер трогается только в режиме fakeip. В обычном режиме имена
-    # распознаются по самому соединению, и dnsmasq остаётся как был.
-    if [ "$(config_uci_get settings dns_mode)" = "fakeip" ]; then
-        dnsmasq_configure || log_warn "dnsmasq не переключён, поддельные адреса выдавать некому"
-    else
-        dnsmasq_restore
-    fi
-
-    dnsmasq_protection
+    service_network_apply || return 1
 
     # Панель отдаётся, только если её файлы на месте: пакет её не несёт,
     # её кладёт установщик или выкладка со стенда.
@@ -407,28 +507,32 @@ service_bootstrap_network_restore() {
 
 service_reconcile() {
     local owner="${1:-}" generated changed=0 subnets_ready=1
-    service_wan_ready || return 1
     [ ! -f "$XKOP_RUN_DIR/service-stopped" ] || return 1
-    # Restore local delivery before any network operation can block on it.
-    if command -v dnsmasq_verify > /dev/null 2>&1; then
-        if [ "$(config_uci_get settings dns_mode)" != fakeip ]; then
-            dnsmasq_restore || return 1
-        fi
-        dnsmasq_verify || dnsmasq_restart_checked || return 1
+    if [ -f "$XKOP_RUN_DIR/runtime-rollback.pending" ]; then
+        service_runtime_restore || return 1
+        return 2
     fi
+    service_wan_ready || return 1
+    # Reconcile the active snapshot before fetching anything. Edited UCI is
+    # only allowed to affect network state after candidate validation below.
     if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ] \
         || { ! lists_present && ! engine_answers; }; then
         service_bootstrap_network_restore || return 1
-    else
-        if nft_present; then nft_routing_rule || return 1; else nft_apply || return 1; fi
+    elif [ -s "$(service_runtime_path)" ]; then
+        if ! nft_present; then service_runtime_restore || return 1; else nft_routing_rule || return 1; fi
+        if command -v dnsmasq_verify >/dev/null 2>&1; then
+            dnsmasq_verify || service_dns_apply "$(jq -c .dns "$(service_runtime_path)")" || return 1
+        fi
+    elif nft_present; then
+        nft_routing_rule || return 1
     fi
     # A startup hook may have deferred confirmation while another writer was
     # active. Confirm the loaded snapshot before deciding on another restart.
     if engine_answers; then service_finish_start || true; fi
     # Restore a usable cached tunnel as soon as PPPoE becomes ready. A slow
     # subscription endpoint must not delay refreshing pre-WAN DNS/probe state.
-    if [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] && service_proxy_ready; then
-        if nft_present; then nft_routing_rule || return 1; else nft_apply || return 1; fi
+    if [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] && service_proxy_ready && nft_present; then
+        nft_routing_rule || return 1
         return 2
     fi
     lists_present || lists_update
@@ -443,8 +547,9 @@ service_reconcile() {
     if config_generate; then generated=0; changed=1; else generated=$?; fi
     [ "$generated" != 3 ] || return 1
     if ! config_generated_ok "$generated"; then
-        # A broken new candidate must not prevent the last valid file starting.
-        [ -s "$XKOP_CONFIG_PATH" ] && config_validate "$XKOP_CONFIG_PATH" || return 1
+        service_runtime_restore || return 1
+        if ! engine_answers; then return 2; fi
+        return 1
     fi
     [ ! -f "$XKOP_RUN_DIR/config-reload.pending" ] || changed=1
     if [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; then
@@ -458,13 +563,10 @@ service_reconcile() {
         return 1
     fi
     if [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] && service_proxy_ready; then changed=1; fi
-    if [ "$changed" = 1 ] || ! nft_present; then
-        nft_apply || return 1
+    if [ "$changed" = 1 ] || ! nft_present || [ ! -s "$(service_runtime_path)" ]; then
+        service_network_apply || return 1
     else
         nft_routing_rule || return 1
-    fi
-    if [ "$(config_uci_get settings dns_mode)" = fakeip ]; then
-        dnsmasq_configure || return 1
     fi
     # A new cache/config must be loaded even when old metrics answer.
     if [ "$changed" = 1 ] || ! engine_answers; then return 2; fi
@@ -489,7 +591,7 @@ service_reconcile() {
             subnets_ready=0
         fi
         if config_generate; then
-            nft_apply || return 1
+            service_network_apply || return 1
             return 2
         else
             generated=$?
@@ -521,6 +623,8 @@ service_finish_start_locked() {
         && { [ -f "$XKOP_RUN_DIR/config-reload.pending" ] || [ -f "$XKOP_RUN_DIR/wan-reprobe.pending" ] \
             || [ -f "$XKOP_RUN_DIR/bootstrap.pending" ]; }; then return 1; fi
     if cmp -s "$XKOP_RUN_DIR/starting-config.json" "$XKOP_CONFIG_PATH"; then
+        service_runtime_confirm || return 1
+        rm -f "$XKOP_RUN_DIR/runtime-rollback.pending"
         rm -f "$XKOP_RUN_DIR/config-reload.pending"
         if [ "$(cat "$XKOP_RUN_DIR/starting-wan.ready" 2>/dev/null)" = 1 ]; then
             rm -f "$XKOP_RUN_DIR/wan-reprobe.pending"
@@ -687,6 +791,7 @@ service_started_check() {
     fi
 
     log_error "движок не ответил после запуска"
+    lock_run work service_runtime_failed
     recovery_start
     return 1
 }
@@ -861,43 +966,9 @@ service_status_json() {
 # Основной интерфейс роутера при этом не трогается — на нём живёт LuCI,
 # и делить с ним настройки значит однажды уронить оба.
 panel_configure_uhttpd() {
-    command -v uci > /dev/null 2>&1 || return 1
-    [ -f /etc/init.d/uhttpd ] || return 1
-    [ -s "$XKOP_PANEL_ROOT/index.html" ] || return 1
-
-    # Установщик прежних версий заводил ту же панель секцией «xkop». Две секции
-    # на одном порту — и procd без конца перезапускает вторую: «Address in use»
-    # в журнале каждые пять секунд.
-    local legacy=0
-    if [ "$(uci -q get uhttpd.xkop.home 2> /dev/null)" = "$XKOP_PANEL_ROOT" ]; then
-        uci -q delete uhttpd.xkop
-        legacy=1
-    fi
-
-    # Уже настроено — не трогать. Перезапуск uhttpd на каждом старте службы
-    # обрывал запросы LuCI на середине ответа: окно «Роутер не ответил:
-    # not_reachable» при перезапуске xkop из интерфейса. Проверено запросом
-    # через /ubus во время перезапуска.
-    if [ "$legacy" -eq 0 ] \
-        && [ "$(uci -q get "uhttpd.$XKOP_PANEL_SECTION.home" 2> /dev/null)" = "$XKOP_PANEL_ROOT" ] \
-        && [ "$(uci -q get "uhttpd.$XKOP_PANEL_SECTION.listen_http" 2> /dev/null)" = "0.0.0.0:$XKOP_PANEL_PORT" ]; then
-        return 0
-    fi
-
-    uci -q delete "uhttpd.$XKOP_PANEL_SECTION"
-    uci -q set "uhttpd.$XKOP_PANEL_SECTION=uhttpd"
-    uci -q add_list "uhttpd.$XKOP_PANEL_SECTION.listen_http=0.0.0.0:$XKOP_PANEL_PORT"
-    uci -q set "uhttpd.$XKOP_PANEL_SECTION.home=$XKOP_PANEL_ROOT"
-    uci -q set "uhttpd.$XKOP_PANEL_SECTION.cgi_prefix=/cgi-bin"
-    uci -q set "uhttpd.$XKOP_PANEL_SECTION.index_page=index.html"
-    uci -q set "uhttpd.$XKOP_PANEL_SECTION.script_timeout=60"
-    uci -q set "uhttpd.$XKOP_PANEL_SECTION.network_timeout=30"
-    uci -q commit uhttpd
-
-    # reload, а не restart: procd переподнимает только изменившиеся
-    # экземпляры, и LuCI на порту 80 остаётся тем же процессом.
-    /etc/init.d/uhttpd reload > /dev/null 2>&1
-    log_info "панель клиента отдаётся на порту $XKOP_PANEL_PORT"
+    # shellcheck source=/dev/null
+    . "$XKOP_LIB_DIR/panel.sh"
+    panel_tls_configure "$XKOP_PANEL_ROOT" "$XKOP_PANEL_SECTION" "$XKOP_PANEL_PORT"
 }
 
 panel_remove_uhttpd() {

@@ -314,8 +314,25 @@ nft_routed_contains() {
     nft get element inet "$XKOP_NFT_TABLE" routed4 "{ $address }" > /dev/null 2>&1
 }
 
+nft_replace() (
+    # Delete and create are one kernel transaction: a rejected candidate leaves
+    # the live table intact. Check existence for the very first installation.
+    local rules="$1" transaction
+    umask 077
+    [ -s "$rules" ] && [ -r "$rules" ] || return 1
+    transaction=$(mktemp "$XKOP_RUN_DIR/nft-transaction.XXXXXX") || return 1
+    trap 'rm -f "$transaction"' EXIT
+    if nft_present; then
+        printf 'delete table inet %s\n' "$XKOP_NFT_TABLE" > "$transaction" || return 1
+    fi
+    # Finish and check the complete input before nft sees even a delete line.
+    cat "$rules" >> "$transaction" || return 1
+    nft -f - < "$transaction" 2> "$XKOP_RUN_DIR/nft.err"
+)
+
 nft_apply() {
     local interfaces excluded fakeip=0 exclude_ntp=0 routed="" block_dot=0
+    local candidate="$XKOP_RUN_DIR/nft-candidate.rules"
 
     [ "$(config_uci_get settings dns_mode 2> /dev/null)" = "fakeip" ] && fakeip=1
     [ "$(config_uci_get settings exclude_ntp 2> /dev/null)" = "1" ] && exclude_ntp=1
@@ -353,9 +370,8 @@ nft_apply() {
         return 1
     fi
 
-    nft delete table inet "$XKOP_NFT_TABLE" 2> /dev/null || true
-
-    if ! nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "$routed" "$block_dot"         | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+    nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "$routed" "$block_dot" > "$candidate" || return 1
+    if ! nft_replace "$candidate"; then
 
         # Отказ набора — это роутер без маршрутизации, поэтому вторая попытка
         # без выборочного перехвата. Она проще: ни одного значения снаружи,
@@ -365,7 +381,9 @@ nft_apply() {
 
         if [ -n "$routed" ]; then
             log_warn "повторяю без выборочного перехвата"
-            if nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" ""                 | nft -f - 2> "$XKOP_RUN_DIR/nft.err"; then
+            if nft_ruleset "$interfaces" "$excluded" "$fakeip" "$exclude_ntp" "" > "$candidate" \
+                && nft_replace "$candidate"; then
+                mv "$candidate" "$XKOP_RUN_DIR/nft-active.rules" || return 1
                 nft_routing_rule || return 1
                 log_info "правила nft применены без выборочного перехвата"
                 return 0
@@ -373,9 +391,11 @@ nft_apply() {
             log_error "и без него отвергнуты: $(head -n 1 "$XKOP_RUN_DIR/nft.err" 2> /dev/null)"
         fi
 
+        rm -f "$candidate"
         return 1
     fi
 
+    mv "$candidate" "$XKOP_RUN_DIR/nft-active.rules" || return 1
     nft_routing_rule || return 1
     log_info "правила nft применены, источники: $interfaces"
     return 0

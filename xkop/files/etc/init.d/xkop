@@ -1,6 +1,9 @@
 #!/bin/sh /etc/rc.common
 # shellcheck shell=ash disable=SC2034
 
+# Do not let procd/recovery children inherit the package transaction lock.
+exec 7>&- 9>&-
+
 START=99
 
 # Останов при выключении роутера, и это не формальность.

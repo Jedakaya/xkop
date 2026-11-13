@@ -145,7 +145,7 @@ nodes_measure_rtt() { :; }
 
 # До A мы достучались сами, до B — нет.
 mkdir -p "$(dirname "$(nodes_rtt_path)")"
-printf '{"A": 7}' > "$(nodes_rtt_path)"
+printf '{"measured_at":%s,"samples":{"A":7}}' "$(date +%s)" > "$(nodes_rtt_path)"
 
 out=$(nodes_json)
 

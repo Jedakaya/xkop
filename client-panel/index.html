@@ -100,6 +100,7 @@
   var token = sessionStorage.getItem("xkop-token") || "";
 
   function post(path, params) {
+    if (location.protocol !== "https:") return Promise.resolve({ ok: false, error: "https_required" });
     var body = Object.keys(params || {}).map(function (k) {
       return k + "=" + encodeURIComponent(params[k]);
     });
@@ -119,6 +120,20 @@
   }
 
   function el(id) { return document.getElementById(id); }
+
+  // All subscription/RPC values are text, including event arguments.
+  function node(tag, className, children) {
+    var result = document.createElement(tag);
+    if (className) result.className = className;
+    (children || []).forEach(function (child) {
+      result.appendChild(child instanceof Node ? child : document.createTextNode(String(child == null ? "" : child)));
+    });
+    return result;
+  }
+
+  function row(label, value, className) {
+    return node("div", "row " + (className || ""), [node("span", "", [label]), node("span", "", [value])]);
+  }
 
   function login() {
     el("login-error").textContent = "";
@@ -154,25 +169,22 @@
 
   function renderTraffic(s) {
     var d = s.distribution;
+    el("bar").replaceChildren();
+    el("traffic").replaceChildren();
     if (!d) { el("traffic").textContent = "метрики недоступны"; return; }
-
-    var total = s.total || 0;
-    el("bar").innerHTML = ["direct", "proxy", "blocked"].map(function (k) {
-      var share = (d[k] && d[k].share) || 0;
-      return '<i class="' + k + '" style="width:' + (share * 100) + '%"></i>';
-    }).join("");
-
     var names = { direct: "напрямую", proxy: "через туннель", blocked: "заблокировано" };
-    el("traffic").innerHTML = Object.keys(names).map(function (k) {
-      return '<div class="row"><span>' + names[k] + "</span><span>" +
-        bytes(d[k].bytes) + ' <span class="muted">' +
-        Math.round(d[k].share * 1000) / 10 + "%</span></span></div>";
-    }).join("") +
-      (total > 0
-        ? '<div class="muted" style="margin-top:8px">Всего ' + bytes(total) +
-          ". Без распределения весь объём ушёл бы в туннель — сэкономлено " +
-          bytes(total - (d.proxy ? d.proxy.bytes : 0)) + "."
-        : "");
+    Object.keys(names).forEach(function (k) {
+      var value = d[k] || {}, share = Number(value.share) || 0;
+      var part = node("i", k);
+      part.style.width = Math.max(0, Math.min(100, share * 100)) + "%";
+      el("bar").appendChild(part);
+      el("traffic").appendChild(row(names[k], bytes(value.bytes) + " · " + Math.round(share * 1000) / 10 + "%"));
+    });
+    var total = Number(s.total) || 0;
+    if (total > 0) el("traffic").appendChild(node("div", "muted", [
+      "Всего " + bytes(total) + ". Без распределения весь объём ушёл бы в туннель — сэкономлено " +
+      bytes(total - (d.proxy ? d.proxy.bytes : 0)) + "."
+    ]));
   }
 
   function renderSubs(subs) {
@@ -180,57 +192,49 @@
       ready: "готова", stale: "устаревает", empty: "пустая",
       rejected: "отвергнута", blocked: "отказ панели", absent: "не задана",
     };
-    el("subs").innerHTML = subs.length === 0
-      ? '<div class="muted">Подписка не задана</div>'
-      : subs.map(function (s) {
-          var out = '<div class="row"><span>' + s.id + "</span><span>" +
-            (names[s.state] || s.state) + " · " + s.servers + " серверов</span></div>";
-          // Слова панели, а не наши: «достигнут лимит устройств» — не то же
-          // самое, что «серверов нет», и чинится иначе.
-          if (s.announce) out += '<div class="muted">' + s.announce + "</div>";
-          if (s.traffic && s.traffic.total > 0) {
-            out += '<div class="row muted"><span>трафик</span><span>' +
-              bytes(s.traffic.used) + " из " + bytes(s.traffic.total) + "</span></div>";
-          }
-          if (s.traffic && s.traffic.expire > 0) {
-            out += '<div class="row muted"><span>действует до</span><span>' +
-              new Date(s.traffic.expire * 1000).toLocaleDateString() + "</span></div>";
-          }
-          return out;
-        }).join("");
+    el("subs").replaceChildren();
+    if (!subs.length) el("subs").appendChild(node("div", "muted", ["Подписка не задана"]));
+    subs.forEach(function (s) {
+      el("subs").appendChild(row(s.id, (names[s.state] || s.state) + " · " + s.servers + " серверов"));
+      if (s.announce) el("subs").appendChild(node("div", "muted", [s.announce]));
+      if (s.traffic && s.traffic.total > 0) el("subs").appendChild(row("трафик", bytes(s.traffic.used) + " из " + bytes(s.traffic.total), "muted"));
+      if (s.traffic && s.traffic.expire > 0) el("subs").appendChild(row("действует до", new Date(s.traffic.expire * 1000).toLocaleDateString(), "muted"));
+    });
   }
 
   function renderRoutes(r) {
     if (!r || !r.ok) return;
     var channels = r.channels || [];
-    el("routes").innerHTML = (r.bindings || []).map(function (b) {
-      var options = channels.map(function (c) {
+    el("routes").replaceChildren();
+    (r.bindings || []).forEach(function (b) {
+      var select = node("select");
+      channels.forEach(function (c) {
         var label = c.type === "block" ? "блокировать"
           : c.type === "direct" ? "напрямую" : "через туннель";
-        return '<option value="' + c.id + '"' + (c.id === b.channel ? " selected" : "") +
-          ">" + label + "</option>";
-      }).join("");
-      return '<div class="row"><span>' + b.title + "</span>" +
-        '<select onchange="setRoute(\'' + b.id + "', this.value)\">" + options + "</select></div>";
-    }).join("") || '<div class="muted">Привязок нет</div>';
+        var option = node("option", "", [label]);
+        option.value = c.id;
+        option.selected = c.id === b.channel;
+        select.appendChild(option);
+      });
+      select.onchange = function () { setRoute(b.id, select.value); };
+      el("routes").appendChild(row(b.title, select));
+    });
+    if (!(r.bindings || []).length) el("routes").appendChild(node("div", "muted", ["Привязок нет"]));
   }
 
   function renderNodes(n) {
-    var head = '<div class="row"><span>живых</span><span>' + (n.alive || 0) +
-      " из " + (n.total || 0) + "</span></div>" +
-      '<div class="row"><span>выбран</span><span>' + (n.selected || "автоматически") +
-      "</span></div>";
-
-    var list = (n.list || []).map(function (x) {
+    el("nodes").replaceChildren(row("живых", (n.alive || 0) + " из " + (n.total || 0)), row("выбран", n.selected || "автоматически"));
+    (n.list || []).forEach(function (x) {
       var state = { alive: "жив", dead: "мёртв", pending: "проверяется", unobserved: "без наблюдения" };
-      return '<div class="row"><span>' + x.tag + "</span><span>" +
-        (state[x.state] || x.state) +
-        (x.delay_ms === null ? "" : " · " + x.delay_ms + " мс") +
-        ' <button onclick="selectNode(\'' + x.tag.replace(/'/g, "\\'") + "')\">выбрать</button></span></div>";
-    }).join("");
-
-    el("nodes").innerHTML = head + list +
-      '<div class="field"><button onclick="selectNode(\'auto\')">Вернуть автовыбор</button></div>';
+      var button = node("button", "", ["выбрать"]);
+      button.onclick = function () { selectNode(x.tag); };
+      el("nodes").appendChild(row(x.tag, node("span", "", [
+        (state[x.state] || x.state) + (x.delay_ms == null ? "" : " · " + x.delay_ms + " мс") + " ", button
+      ])));
+    });
+    var auto = node("button", "", ["Вернуть автовыбор"]);
+    auto.onclick = function () { selectNode("auto"); };
+    el("nodes").appendChild(node("div", "field", [auto]));
   }
 
   function setSubscription() {
@@ -259,13 +263,12 @@
     el("explain").textContent = "спрашиваю…";
     post("explain", { domain: domain }).then(function (r) {
       if (!r.ok) {
-        el("explain").innerHTML = '<div class="err">не получилось: ' + (r.error || "") + "</div>";
+        el("explain").replaceChildren(node("div", "err", ["не получилось: " + (r.error || "")]));
         return;
       }
-      el("explain").innerHTML =
-        '<div class="row"><span>итог</span><span>' + (r.role || "неизвестно") + "</span></div>" +
-        (r.why ? '<div class="row"><span>почему</span><span>' + r.why + "</span></div>" : "") +
-        (r.node ? '<div class="row"><span>узел</span><span>' + r.node.tag + "</span></div>" : "");
+      el("explain").replaceChildren(row("итог", r.role || "неизвестно"));
+      if (r.why) el("explain").appendChild(row("почему", r.why));
+      if (r.node) el("explain").appendChild(row("узел", r.node.tag));
     });
   }
 
@@ -276,6 +279,11 @@
     el("login").classList.remove("hidden");
   }
 
+  if (location.protocol !== "https:") {
+    logout();
+    el("password").disabled = true;
+    el("login-error").textContent = "Для входа откройте панель по HTTPS с доверенным сертификатом.";
+  }
   if (token) {
     el("login").classList.add("hidden");
     el("app").classList.remove("hidden");

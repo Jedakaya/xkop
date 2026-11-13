@@ -13,6 +13,7 @@ XKOP_BIN=/usr/bin/xkop
 TOKEN_FILE=/tmp/xkop-panel-token
 FAIL_FILE=/tmp/xkop-panel-failures
 TOKEN_TTL=3600
+umask 077
 
 header_json() {
     echo "Content-Type: application/json"
@@ -25,11 +26,31 @@ fail() {
     exit 0
 }
 
+# uhttpd supplies HTTPS itself; never trust a forwarding header from clients.
+[ "${HTTPS:-}" = on ] || fail "https_required"
+
 # Декодируется всё, а не горстка выбранных символов. Половинчатое
 # декодирование уже приводило к тому, что пароль с вопросительным знаком
 # можно было задать и больше никогда не ввести.
 urldecode() {
-    printf '%b' "$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')"
+    # POSIX printf accepts octal escapes; \xHH is not portable (e.g. dash).
+    # Escape literal backslashes so user input cannot become printf syntax.
+    printf '%b' "$(printf '%s' "$1" | awk '
+        BEGIN { hex="0123456789abcdef" }
+        {
+            if (NR > 1) printf "\\012"
+            for (i=1; i<=length($0); i++) {
+                c=substr($0,i,1)
+                if (c == "%" && i+2 <= length($0)) {
+                    a=index(hex,tolower(substr($0,i+1,1)))
+                    b=index(hex,tolower(substr($0,i+2,1)))
+                    if (a && b) { printf "\\%03o", (a-1)*16+b-1; i+=2; continue }
+                }
+                if (c == "+") printf " "
+                else if (c == "\\") printf "\\\\"
+                else printf "%s", c
+            }
+        }')"
 }
 
 post_field() {

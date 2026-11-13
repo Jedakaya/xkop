@@ -104,8 +104,8 @@ mkdir -p "$(lock_dir busy)"
 printf '%s' "$$" > "$(lock_dir busy)/pid"
 
 : > "$work/ran"
-check "занятый замок не отменяет обязательную работу" "7"     "$(lock_run_anyway busy job > /dev/null 2>&1; echo $?)"
-check "и работа выполнилась" "x" "$(cat "$work/ran")"
+check "занятый замок явно откладывает обязательную работу" "75"     "$(lock_run_anyway busy job > /dev/null 2>&1; echo $?)"
+check "конкурирующая работа не выполняется" "" "$(cat "$work/ran")"
 check "чужой замок при этом не тронут" "yes"     "$([ -d "$(lock_dir busy)" ] && echo yes || echo no)"
 lock_release busy
 

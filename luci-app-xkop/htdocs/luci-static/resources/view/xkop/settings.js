@@ -174,7 +174,7 @@ function profiles(map) {
         this.getUIElement(section_id).setValue(kept);
       }
       notes.forEach(function (text) {
-        ui.addNotification(null, E("p", {}, text), "warning");
+        ui.addNotification(null, E("p", {}, [text]), "warning");
       });
     } finally {
       this._busy = false;

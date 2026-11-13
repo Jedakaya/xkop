@@ -109,7 +109,7 @@ dnsmasq_restore_option() {
 }
 
 dnsmasq_configure() {
-    if dnsmasq_configure_changes; then return 0; fi
+    if dnsmasq_configure_changes "$@"; then return 0; fi
     # Discard partial writes; a failed restart retains its committed backup.
     uci -q revert dhcp
     return 1
@@ -118,7 +118,7 @@ dnsmasq_configure() {
 dnsmasq_configure_changes() {
     local current server
 
-    if [ "$(config_uci_get settings dont_touch_dhcp)" = "1" ]; then
+    if [ "${1:-$(config_uci_get settings dont_touch_dhcp)}" = "1" ]; then
         log_info "dnsmasq не трогаем по настройке dont_touch_dhcp"
         return 0
     fi
@@ -174,39 +174,35 @@ dnsmasq_configure_changes() {
 #
 # Both are off unless asked for: filtering record types is a blunt instrument
 # and someone may be relying on them.
+# Update only our entries; other filter types and DNS servers belong to UCI.
 dnsmasq_protection() {
-    local https ptr canary changed=0
-
-    https=$(config_uci_get settings block_https_records)
-    ptr=$(config_uci_get settings block_ptr_records)
-    canary=$(config_uci_get settings block_firefox_canary)
-
-    dnsmasq_delete_option "dhcp.@dnsmasq[0].filter_rr" || return 1
-
-    if [ "$https" = "1" ]; then
-        uci -q add_list "dhcp.@dnsmasq[0].filter_rr=HTTPS" || return 1
-        changed=1
-    fi
-    if [ "$ptr" = "1" ]; then
-        uci -q add_list "dhcp.@dnsmasq[0].filter_rr=PTR" || return 1
-        changed=1
-    fi
-
-    # Firefox asks this name before turning its own DoH on. An empty answer
-    # from us is the documented way to say "not here".
-    if [ "$canary" = "1" ]; then
-        # Список, а не значение: без проверки каждый запуск добавлял копию.
-        uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null | tr ' ' '\n' \
-            | grep -qxF "/use-application-dns.net/" \
-            || uci -q add_list "dhcp.@dnsmasq[0].server=/use-application-dns.net/" || return 1
-        changed=1
-    fi
-
-    if [ "$changed" -eq 1 ]; then
+    local https ptr canary changed=0 entry desired key present
+    https=${1:-$(config_uci_get settings block_https_records)}
+    ptr=${2:-$(config_uci_get settings block_ptr_records)}
+    canary=${3:-$(config_uci_get settings block_firefox_canary)}
+    for entry in HTTPS PTR /use-application-dns.net/; do
+        key='dhcp.@dnsmasq[0].filter_rr'
+        case "$entry" in
+            HTTPS) desired="$https" ;;
+            PTR) desired="$ptr" ;;
+            *) desired="$canary"; key='dhcp.@dnsmasq[0].server' ;;
+        esac
+        present=0
+        uci -q get "$key" 2>/dev/null | tr ' ' '\n' | grep -qxF "$entry" && present=1
+        if [ "$desired" = 1 ] && [ "$present" = 0 ]; then
+            uci -q add_list "$key=$entry" || return 1
+            changed=1
+        elif [ "$desired" != 1 ] && [ "$present" = 1 ]; then
+            uci -q del_list "$key=$entry" || return 1
+            changed=1
+        fi
+    done
+    if [ "$changed" = 1 ]; then
         uci -q commit dhcp || return 1
         dnsmasq_restart_checked || return 1
         log_info "фильтры записей DNS применены"
     fi
+    return 0
 }
 
 # Removed separately from the resolver switch: the filters can be on while the
@@ -215,10 +211,13 @@ dnsmasq_protection() {
 dnsmasq_protection_clear() {
     local changed=0
 
-    if uci -q get "dhcp.@dnsmasq[0].filter_rr" > /dev/null 2>&1; then
-        uci -q delete "dhcp.@dnsmasq[0].filter_rr" || return 1
-        changed=1
-    fi
+    local entry
+    for entry in HTTPS PTR; do
+        if uci -q get "dhcp.@dnsmasq[0].filter_rr" 2>/dev/null | tr ' ' '\n' | grep -qxF "$entry"; then
+            uci -q del_list "dhcp.@dnsmasq[0].filter_rr=$entry" || return 1
+            changed=1
+        fi
+    done
 
     if uci -q get "dhcp.@dnsmasq[0].server" 2> /dev/null | grep -q 'use-application-dns.net'; then
         uci -q del_list "dhcp.@dnsmasq[0].server=/use-application-dns.net/" 2> /dev/null || return 1
@@ -272,7 +271,6 @@ dnsmasq_restore() {
         [ "$value" = "$XKOP_DNS_INBOUND_ADDRESS" ] && continue
         uci -q add_list "dhcp.@dnsmasq[0].server=$value" || return 1
     done
-    dnsmasq_delete_option "dhcp.@dnsmasq[0].filter_rr" || return 1
 
     dnsmasq_restore_option noresolv xkop_noresolv "$trusted" || return 1
     dnsmasq_restore_option cachesize xkop_cachesize "$trusted" || return 1

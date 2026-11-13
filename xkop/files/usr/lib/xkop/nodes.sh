@@ -92,45 +92,56 @@ nodes_rtt_path() {
     printf '%s/node-rtt.json' "$XKOP_RUN_DIR"
 }
 
-nodes_measure_rtt() {
-    local pool tmp tag host port t
-
-    command -v curl > /dev/null 2>&1 || return 0
-    pool=$(subscription_pool_all 2> /dev/null)
-    [ -n "$pool" ] || return 0
-
-    mkdir -p "$XKOP_RUN_DIR"
-    tmp="$XKOP_RUN_DIR/node-rtt.raw"
-    : > "$tmp"
-
-    printf '%s' "$pool" | jq -r '
-        .[] | [
-            .tag,
-            (.outbound.settings.vnext[0].address? // .outbound.settings.servers[0].address?
-             // .outbound.settings.address? // ""),
-            ((.outbound.settings.vnext[0].port? // .outbound.settings.servers[0].port?
-              // .outbound.settings.port? // 0) | tostring)
-        ] | @tsv' 2> /dev/null > "$XKOP_RUN_DIR/node-addr.tsv"
-
-    while IFS='	' read -r tag host port; do
-        [ -n "$host" ] && [ -n "$port" ] && [ "$port" != "0" ] || continue
-        t=$(curl -s -o /dev/null -m 5 -w '%{time_connect}' "http://$host:$port/" 2> /dev/null)
-        case "$t" in
-            '' | 0.000000 | 0) continue ;;
-        esac
-        printf '%s\t%s\n' "$tag" "$t" >> "$tmp"
-    done < "$XKOP_RUN_DIR/node-addr.tsv"
-
-    if [ -s "$tmp" ]; then
-        jq -R -s -c '
-            split("\n") | map(select(. != "") | split("\t"))
-            | map({key: .[0], value: ((.[1] | tonumber) * 1000 | round)})
-            | from_entries' "$tmp" > "$(nodes_rtt_path)" 2> /dev/null
-    fi
-
-    rm -f "$tmp" "$XKOP_RUN_DIR/node-addr.tsv"
-    return 0
+nodes_clock() {
+    local up rest
+    if read -r up rest < /proc/uptime; then printf '%s' "${up%.*}"; else date +%s; fi
 }
+
+nodes_probe_rtt() {
+    local tag="$1" host="$2" port="$3" budget="$4" output="$5" t
+    # A positive time_connect proves TCP reachability even if HTTP later fails.
+    # The overall cycle is bounded independently of the number of nodes.
+    case "$host" in *:*) host="[$host]";; esac
+    t=$(curl -s -o /dev/null --noproxy '*' --connect-timeout "$budget" -m "$budget" \
+        -w '%{time_connect}' "http://$host:$port/" 2>/dev/null)
+    jq -nc --arg tag "$tag" --arg t "$t" \
+        '{key:$tag, value:(try ($t | tonumber | if . > 0 then . * 1000 | round else null end) catch null)}' > "$output"
+}
+
+nodes_measure_rtt() (
+    local pool tmp tag host port remaining batch=0 index=0 pids="" pid deadline
+    command -v curl >/dev/null 2>&1 || return 0
+    pool=$(subscription_pool_all 2>/dev/null)
+    [ -n "$pool" ] || return 1
+    mkdir -p "$XKOP_RUN_DIR" || return 1
+    tmp=$(mktemp -d "$XKOP_RUN_DIR/node-rtt.XXXXXX") || return 1
+    trap 'rm -rf "$tmp"' EXIT
+    trap 'for pid in $pids; do kill "$pid" 2>/dev/null; done; exit 143' TERM INT
+    printf '%s' "$pool" | jq -r '.[] | [ .tag,
+        (.outbound.settings.vnext[0].address? // .outbound.settings.servers[0].address?
+         // .outbound.settings.address? // ""),
+        ((.outbound.settings.vnext[0].port? // .outbound.settings.servers[0].port?
+          // .outbound.settings.port? // 0) | tostring)] | @tsv' > "$tmp/addresses" || return 1
+    deadline=$(($(nodes_clock) + 30))
+    while IFS='	' read -r tag host port; do
+        [ -n "$host" ] && [ -n "$port" ] && [ "$port" != 0 ] || continue
+        remaining=$((deadline - $(nodes_clock)))
+        [ "$remaining" -gt 0 ] || break
+        [ "$remaining" -le 5 ] || remaining=5
+        nodes_probe_rtt "$tag" "$host" "$port" "$remaining" "$tmp/result-$index" &
+        pids="$pids $!"
+        index=$((index+1)); batch=$((batch+1))
+        if [ "$batch" -eq 4 ]; then
+            for pid in $pids; do wait "$pid"; done
+            pids=""; batch=0
+        fi
+    done < "$tmp/addresses"
+    for pid in $pids; do wait "$pid"; done
+    : > "$tmp/results"
+    for pid in "$tmp"/result-*; do [ ! -f "$pid" ] || cat "$pid" >> "$tmp/results"; done
+    jq -sc --argjson now "$(date +%s)" '{measured_at:$now, samples:from_entries}' \
+        "$tmp/results" > "$tmp/published" && mv "$tmp/published" "$(nodes_rtt_path)"
+)
 
 # Everything about the pool in one answer: what the subscription gave, what the
 # observatory thinks of it, and which one is being used right now.
@@ -151,9 +162,13 @@ nodes_json() {
         --argjson pool "$pool" \
         --argjson stats "${stats:-null}" \
         --argjson selection "$selection" \
-        --argjson rtt "$(cat "$(nodes_rtt_path)" 2> /dev/null || echo '{}')" \
+        --argjson measurement "$(cat "$(nodes_rtt_path)" 2> /dev/null || echo '{}')" \
+        --argjson now "$(date +%s)" \
         '
         ($stats.observatory.nodes // []) as $observed
+        | ($measurement.measured_at // 0) as $measured
+        | ($measured > 0 and $now >= $measured and $now - $measured <= 600) as $fresh
+        | (if $fresh then ($measurement.samples // {}) else {} end) as $rtt
         | {
             ok: true,
             selection: $selection.selection,
@@ -185,6 +200,11 @@ nodes_json() {
                     ),
                     # Достучались ли мы до узла сами, в обход пробы.
                     reachable: ($rtt[$node.tag] != null),
+                    rtt_measured_at: (if $measured > 0 then $measured else null end),
+                    rtt_status: (if $measured == 0 then "unmeasured"
+                        elif $fresh | not then "stale"
+                        elif ($rtt | has($node.tag) | not) then "unmeasured"
+                        elif $rtt[$node.tag] == null then "timeout" else "measured" end),
                     # Своё измерение важнее пробы: оно про узел, а проба —
                     # про дорогу через узел куда-то ещё.
                     delay_ms: ($rtt[$node.tag] // .delay_ms),

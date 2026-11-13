@@ -292,7 +292,9 @@ main() {
         select)
             # Selection also persists startup routing; serialize with rebuilds.
             if lock_acquire work; then
-                trap 'lock_release work' EXIT INT TERM
+                trap 'lock_release work' EXIT
+                trap 'exit 130' INT
+                trap 'exit 143' TERM
                 nodes_select "${1:-auto}"
                 lock_release work
                 trap - EXIT INT TERM
@@ -331,23 +333,16 @@ main() {
             cmd_configure
             ;;
         prepare)
-            # Без замка, и это не упущение.
-            #
-            # prepare — единственный путь, которым на роутере появляются
-            # правила, резолвер и расписание. Замок при занятости пропускает
-            # работу молча, и обёрнутый в него prepare означал вот что:
-            # обновление пакета останавливает службу (правила снимаются),
-            # запуск попадает на идущую задачу по расписанию, применение
-            # пропускается — и роутер остаётся без единого правила, весь
-            # трафик идёт напрямую. Ровно это и случилось на живом роутере
-            # через час после того, как замок был добавлен.
-            #
-            # Замок защищает фоновые задачи друг от друга. Запуск службы
-            # не фоновая задача, и уступать он не имеет права.
-            if lock_run_anyway work service_prepare; then
+            if service_prepare_serialized; then
                 jq -nc '{ok: true, result: "prepared"}'
             else
-                jq -nc '{ok: false, error: "nothing_to_run", detail: {config_present: false}}'
+                prepare_status=$?
+                if [ "$prepare_status" = 75 ]; then
+                    jq -nc '{ok:false, error:"prepare_deferred", retrying:true}'
+                else
+                    jq -nc --argjson present "$([ -s "$XKOP_CONFIG_PATH" ] && echo true || echo false)" \
+                        '{ok:false, error:"prepare_failed", detail:{config_present:$present}}'
+                fi
             fi
             ;;
         wan_up)

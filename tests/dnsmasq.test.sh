@@ -259,6 +259,20 @@ XKOP_TEST_UCI_FAIL_KEY=''; export XKOP_TEST_UCI_FAIL_KEY
 dnsmasq_restore; rc=$?
 check "повтор после неполной очистки сохраняет сервер" 9.9.9.9 "$(value_of 'dhcp.@dnsmasq[0].server')"
 
+# Toggle through the normal apply path; preserve administrator-owned filters.
+uci -q add_list 'dhcp.@dnsmasq[0].filter_rr=TXT'
+config_uci_get() { printf '%s' "$protection"; }
+dnsmasq_restart_checked() { echo restart >> "$work/protection-restarts"; }
+protection=1
+dnsmasq_protection
+dnsmasq_protection
+check 'unchanged protection avoids restart' 1 "$(wc -l < "$work/protection-restarts" | tr -d ' ')"
+protection=0
+dnsmasq_protection
+check 'disabled filters are committed' TXT "$(value_of 'dhcp.@dnsmasq[0].filter_rr')"
+check 'disabled canary is removed' no "$(value_of 'dhcp.@dnsmasq[0].server' | grep -qF /use-application-dns.net/ && echo yes || echo no)"
+check 'removal restarts resolver' 2 "$(wc -l < "$work/protection-restarts" | tr -d ' ')"
+
 echo "$((total - failed))/$total"
 
 [ "$failed" -eq 0 ]

@@ -10,10 +10,12 @@
 // обжигались.
 
 const BIN = "/usr/bin/xkop";
+const READ_BIN = "/usr/libexec/xkop-read";
+const READ_COMMANDS = ["dashboard", "get_status", "stats", "nodes", "subscriptions", "global_check", "explain", "recent"];
 
 function run(args) {
   return fs
-    .exec(BIN, args)
+    .exec(READ_COMMANDS.indexOf(args[0]) >= 0 ? READ_BIN : BIN, args)
     .then(function (result) {
       if (!result || result.code !== 0 || !result.stdout) {
         return {

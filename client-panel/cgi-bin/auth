@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck shell=ash
 # Вход по паролю роутера.
 #
 # Ограничение попыток здесь не украшение: без него точка входа превращается
@@ -6,7 +7,8 @@
 . "$(dirname "$0")/_common"
 
 DATA=$(read_post)
-PASS=$(urldecode "$(post_field "$DATA" password)")
+PASS=$(urldecode "$(post_field "$DATA" password)"; printf '.')
+PASS=${PASS%.}
 
 NOW=$(date +%s)
 FAILS=0
@@ -24,30 +26,35 @@ if [ "$FAILS" -ge 5 ]; then
 fi
 
 grant() {
-    local token
-    token=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "t-$$-$NOW")
-    printf '%s\n%s\n' "$token" "$((NOW + TOKEN_TTL))" > "$TOKEN_FILE"
-    chmod 600 "$TOKEN_FILE" 2>/dev/null
+    local token tmp
+    token=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || fail "auth_unavailable"
+    [ -n "$token" ] || fail "auth_unavailable"
+    tmp=$(mktemp "${TOKEN_FILE}.XXXXXX") || fail "auth_unavailable"
+    if ! printf '%s\n%s\n' "$token" "$((NOW + TOKEN_TTL))" > "$tmp" || ! mv -f "$tmp" "$TOKEN_FILE"; then
+        rm -f "$tmp"
+        fail "auth_unavailable"
+    fi
     rm -f "$FAIL_FILE"
     header_json
     printf '{"ok":true,"token":"%s"}\n' "$token"
     exit 0
 }
 
-HASH=$(grep '^root:' /etc/shadow 2>/dev/null | cut -d: -f2)
+# Blank/locked accounts and unreadable or malformed shadow are never setup login.
+[ -r /etc/shadow ] || fail "auth_unavailable"
+HASH=$(awk -F: '$1 == "root" && NF >= 2 { count++; hash=$2 } END { if (count != 1) exit 1; print hash }' /etc/shadow) || fail "auth_unavailable"
+case "$HASH" in '' | '!'* | '*'*) fail "password_login_disabled" ;; esac
 
-# Пароль не задан — пускаем. Требовать несуществующий пароль значит запереть
-# человека снаружи собственного роутера.
-if [ -z "$HASH" ] || [ "$HASH" = "*" ] || [ "$HASH" = "!" ]; then
-    grant
-fi
-
-SALT=$(printf '%s' "$HASH" | cut -d'$' -f1-3)
-CHECK=$(printf '%s' "$PASS" | openssl passwd -stdin -salt "$SALT" -6 2>/dev/null)
-[ "$CHECK" = "$HASH" ] || CHECK=$(printf '%s' "$PASS" | openssl passwd -stdin -salt "$SALT" -5 2>/dev/null)
-[ "$CHECK" = "$HASH" ] || CHECK=$(printf '%s' "$PASS" | openssl passwd -stdin -salt "$SALT" -1 2>/dev/null)
-
-if [ -n "$CHECK" ] && [ "$CHECK" = "$HASH" ]; then
+# rpcd uses the platform crypt verifier with the complete hash setting, including
+# rounds and the algorithms supported by this firmware. No openssl dependency.
+command -v ubus >/dev/null 2>&1 || fail "auth_unavailable"
+REQUEST=$(jq -nc --arg password "$PASS" '{username:"root", password:$password, timeout:30}') || fail "auth_unavailable"
+REPLY=$(ubus call session login "$REQUEST" 2>/dev/null)
+SESSION=$(printf '%s' "$REPLY" | jq -er '.ubus_rpc_session | select(type == "string" and length == 32)' 2>/dev/null) || SESSION=
+case "$SESSION" in '' | *[!a-fA-F0-9]*) SESSION= ;; esac
+if [ -n "$SESSION" ]; then
+    # Only our limited panel token survives; do not leak an admin rpcd session.
+    ubus call session destroy "$(jq -nc --arg id "$SESSION" '{ubus_rpc_session:$id}')" >/dev/null 2>&1 || fail "auth_unavailable"
     grant
 fi
 

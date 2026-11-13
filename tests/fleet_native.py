@@ -586,6 +586,54 @@ test "$(jq -r .state /etc/xkop/fleet/supervisor/status.json)" = committed
             return f"apk --no-network --allow-untrusted add {path}"
         return f"opkg --force-downgrade install {path}"
 
+    def test_ordinary_updater_downgrade_and_partial_file_repair(self):
+        for fmt in ("apk", "ipk"):
+            with self.subTest(format=fmt):
+                self.setup_router(fmt)
+                self.shell(self.install_command("/lab/bundle/forward." + fmt))
+                script = f'''export PATH=/lab:$PATH
+. /lab/code/xkop/files/usr/lib/xkop/update.sh
+XKOP_ROLLBACK_DIR=/lab/ordinary-rollback
+mkdir -p "$XKOP_ROLLBACK_DIR"
+update_restore_file /lab/bundle/rollback.{fmt} xkop || exit 91
+test "$(update_package_version xkop)" = 0.2.22-r1 || exit 92
+'''
+                result = self.shell(script, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                # Keep the old database version but damage an owned file: add
+                # alone may no-op; restoring must force extraction of old bytes.
+                target = self.router / "usr/share/xkop-lab/value"
+                target.write_text("partial new package\n")
+                result = self.shell(script, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(target.read_bytes(), b"old\n")
+
+    def test_ordinary_updater_managed_transaction_lock(self):
+        for fmt in ("apk", "ipk"):
+            with self.subTest(format=fmt):
+                self.setup_router(fmt)
+                result = self.shell('''export PATH=/lab:$PATH
+. /lab/code/xkop/files/usr/lib/xkop/lock.sh
+. /lab/code/xkop/files/usr/lib/xkop/update.sh
+XKOP_RUN_DIR=/tmp/ordinary-update
+log_info() { :; }; log_warn() { :; }
+update_apply_locked() { touch /lab/mutation; }
+exec 9>/etc/xkop/fleet/transaction.lock
+flock -n 9 || exit 91
+update_apply >/lab/result.json
+test "$(jq -r .error /lab/result.json)" = update_busy || exit 92
+test ! -e /lab/mutation || exit 93
+exec 9>&-
+mkdir -p /etc/xkop/fleet/configuration/current
+echo '{"state":"recovery_failed"}' >/etc/xkop/fleet/configuration/current/status.json
+update_apply >/lab/result.json
+test "$(jq -r .error /lab/result.json)" = recovery_required || exit 94
+echo '{"state":"committed"}' >/etc/xkop/fleet/configuration/current/status.json
+update_apply
+test -e /lab/mutation
+''', check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def sign(self):
         data = json.dumps(self.manifest).encode()
         self.pin = hashlib.sha256(data).hexdigest()

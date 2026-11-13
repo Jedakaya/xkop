@@ -1,0 +1,18 @@
+#!/bin/sh
+# Argument-boundary enforcement for delegated read-only rpcd sessions.
+# In particular, `canary` learns UCI state and is NOT a read operation.
+case "${1:-}" in
+    dashboard | get_status | stats | nodes | subscriptions | global_check)
+        [ "$#" -eq 1 ] || exit 1
+        ;;
+    explain)
+        [ "$#" -eq 2 ] && [ -n "$2" ] || exit 1
+        ;;
+    recent)
+        [ "$#" -eq 2 ] || exit 1
+        case "$2" in '' | *[!0-9]*) exit 1 ;; esac
+        [ "$2" -le 200 ] 2>/dev/null || exit 1
+        ;;
+    *) exit 1 ;;
+esac
+exec /usr/bin/xkop "$@"

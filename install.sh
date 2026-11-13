@@ -5,7 +5,7 @@
 #
 # Именно из релиза: raw.githubusercontent отдаёт ветку с пограничного кэша
 # и параметры запроса игнорирует, поэтому исправленный скрипт ещё какое-то
-# время приезжает старым. Файл релиза привязан к тегу и подменён быть не может.
+# время приезжает старым. Release assets follow the tag but can be replaced by maintainers.
 #
 # Ставит пакетами: пакетный менеджер знает версию, умеет обновить и умеет
 # удалить. Обновление потом — одной командой:
@@ -361,12 +361,29 @@ engine_make_room() {
 
 engine_room_restore() {
     [ -n "$ENGINE_STASH" ] || return 0
-    if [ "$1" != "1" ] && [ ! -e /usr/bin/xray ]; then
-        cp "$ENGINE_STASH" /usr/bin/xray && chmod 755 /usr/bin/xray
+    if [ "$1" != "1" ]; then
+        if ! cp "$ENGINE_STASH" /usr/bin/xray || ! chmod 755 /usr/bin/xray; then
+            warn "не удалось вернуть движок; резерв сохранён: $ENGINE_STASH"
+            return 1
+        fi
         note "прежний движок возвращён на место"
     fi
     rm -f "$ENGINE_STASH"
     ENGINE_STASH=""
+}
+
+engine_install_verified() {
+    local diagnostic actual output
+    diagnostic=$(/usr/bin/xkop check_engine) || return 1
+    printf '%s\n' "$diagnostic"
+    printf '%s' "$diagnostic" | jq -e \
+        '.engine_installed == true and .engine_version_ok == true' >/dev/null 2>&1 || return 1
+    # Probe the current binary, independently of the diagnostic version cache.
+    output=$(/usr/bin/xray version 2>/dev/null) || return 1
+    actual=$(printf '%s\n' "$output" | awk '$1 == "Xray" && $2 ~ /^[0-9][0-9.]*$/ {print $2; exit}')
+    [ -n "$actual" ] || return 1
+    [ "$actual" = "$(printf '%s' "$diagnostic" | jq -r '.engine_version // empty')" ] || return 1
+    [ "$WAS_RUNNING" -eq 0 ] || [ "${started:-0}" -eq 1 ]
 }
 
 pkg_install_file() {
@@ -517,27 +534,25 @@ panel_address() {
     lan_ip=$(uci -q get network.lan.ipaddr 2> /dev/null)
     lan_ip="${lan_ip%%/*}"
 
-    [ -n "$host" ] && echo "http://$(echo "$host" | tr 'A-Z' 'a-z').$domain:$PANEL_PORT"
-    [ -n "$lan_ip" ] && echo "http://$lan_ip:$PANEL_PORT"
+    [ -n "$host" ] && echo "https://$(echo "$host" | tr 'A-Z' 'a-z').$domain:$PANEL_PORT"
+    [ -n "$lan_ip" ] && echo "https://$lan_ip:$PANEL_PORT"
     return 0
 }
 
 configure_panel_uhttpd() {
-    # Прежнее имя секции. Две секции на одном порту — и procd без конца
-    # перезапускает вторую.
-    [ "$(uci -q get uhttpd.xkop.home)" = "$PANEL_ROOT" ] && uci -q delete uhttpd.xkop
-    uci -q delete uhttpd."$PANEL_UHTTPD_SECTION"
-    uci set uhttpd."$PANEL_UHTTPD_SECTION"=uhttpd
-    uci add_list uhttpd."$PANEL_UHTTPD_SECTION".listen_http="0.0.0.0:$PANEL_PORT"
-    uci set uhttpd."$PANEL_UHTTPD_SECTION".home="$PANEL_ROOT"
-    uci set uhttpd."$PANEL_UHTTPD_SECTION".cgi_prefix="/cgi-bin"
-    uci set uhttpd."$PANEL_UHTTPD_SECTION".index_page="index.html"
-    uci set uhttpd."$PANEL_UHTTPD_SECTION".script_timeout="60"
-    uci set uhttpd."$PANEL_UHTTPD_SECTION".network_timeout="30"
-    uci commit uhttpd
-
-    # reload переподнимает только изменившийся экземпляр, LuCI не трогается.
-    /etc/init.d/uhttpd reload > /dev/null 2>&1
+    if [ ! -r "$XKOP_LIB_DIR/panel.sh" ]; then
+        # Installer can update a pre-fix package: remove plaintext listeners
+        # even when its optional TLS migration helper is unavailable.
+        uci -q delete uhttpd."$PANEL_UHTTPD_SECTION"
+        [ "$(uci -q get uhttpd.xkop.home)" != "$PANEL_ROOT" ] || uci -q delete uhttpd.xkop
+        uci commit uhttpd
+        /etc/init.d/uhttpd reload >/dev/null 2>&1
+        warn "панель отключена: нет модуля настройки HTTPS"
+        return 1
+    fi
+    # shellcheck source=/dev/null
+    . "$XKOP_LIB_DIR/panel.sh"
+    panel_tls_configure "$PANEL_ROOT" "$PANEL_UHTTPD_SECTION" "$PANEL_PORT"
 }
 
 PANEL_CGI_FILES="_common auth status subscription-set subscription-update routes route-set node-select explain"
@@ -581,7 +596,7 @@ install_client_panel() {
         return 1
     fi
 
-    configure_panel_uhttpd
+    configure_panel_uhttpd || { warn "панель отключена: HTTPS недоступен"; return 1; }
 
     # Порт проверяется запросом, а не объявляется. С несколькими попытками:
     # uhttpd после перезапуска поднимается не мгновенно, и первый же отказ
@@ -589,7 +604,7 @@ install_client_panel() {
     answered=0
     for attempt in 1 2 3 4 5; do
         if command -v curl > /dev/null 2>&1 \
-            && curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PANEL_PORT/" 2> /dev/null; then
+            && curl -kfsS --max-time 3 -o /dev/null "https://127.0.0.1:$PANEL_PORT/" 2> /dev/null; then
             answered=1
             break
         fi
@@ -957,7 +972,9 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
                 note "обновляю $HAVE -> $VERSION"
             fi
 
-            file_unowned /usr/bin/xkop && branch_install_remove
+            if [ -z "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != 1 ]; then
+                die "релиз неполный: нет пакета движка для $ARCH/$FORMAT"
+            fi
 
             # Всё качается в RAM целиком и только потом ставится: отказ
             # на середине загрузки не должен оставлять роутер с половиной.
@@ -967,8 +984,8 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
             # роутера, у которого её и так немного, и лишняя переустановка
             # на ровном месте. Версия в имени файла релиза и версия, которую
             # называет менеджер, — одна и та же строка вида "26.7.28-r1".
-            ENGINE_HAVE=$(engine_version_core "$(engine_pkg_version)")
-            ENGINE_WANT=$(engine_version_core "$(engine_url_version "$ENGINE_URL")")
+            ENGINE_HAVE=$(engine_pkg_version)
+            ENGINE_WANT=$(engine_url_version "$ENGINE_URL")
             if [ -n "$ENGINE_HAVE" ] && [ "$ENGINE_HAVE" = "$ENGINE_WANT" ]; then
                 note "движок $ENGINE_HAVE уже стоит, не качаю"
                 ENGINE_SKIP=1
@@ -986,30 +1003,32 @@ if [ "${XKOP_FROM_BRANCH:-0}" != "1" ]; then
                     if file_unowned /usr/bin/xray; then
                         note "убираю движок, положенный мимо менеджера"
                         saved_engine="/tmp/xkop-xray.$$"
-                        cp /usr/bin/xray "$saved_engine" && rm -f /usr/bin/xray
+                        cp /usr/bin/xray "$saved_engine" || die "не удалось сохранить прежний движок"
+                        rm -f /usr/bin/xray || die "не удалось освободить место под движок"
                     fi
 
                     engine_make_room
                     if pkg_install_file "$WORK/engine.$FORMAT"; then
                         note "движок установлен пакетом"
-                        engine_room_restore 1
-                        rm -f "$saved_engine"
+                        # Keep the old binary until the full install health check.
+                        [ -z "$saved_engine" ] || ENGINE_STASH="$saved_engine"
                     else
                         warn "движок пакетом не встал"
-                        engine_room_restore 0
-                        if [ -n "$saved_engine" ] && [ -s "$saved_engine" ] \
-                            && [ ! -e /usr/bin/xray ]; then
-                            cp "$saved_engine" /usr/bin/xray
-                            chmod +x /usr/bin/xray
-                            note "прежний движок возвращён на место"
+                        engine_room_restore 0 || die "восстановление движка не завершено"
+                        if [ -n "$saved_engine" ]; then
+                            ENGINE_STASH="$saved_engine"
+                            engine_room_restore 0 || die "восстановление прежнего движка не завершено"
                         fi
-                        rm -f "$saved_engine"
+                        die "пакет движка не установлен; установка остановлена"
                     fi
+                else
+                    die "пакет движка не загружен; установка остановлена"
                 fi
             elif [ -z "$ENGINE_URL" ] && [ "${XKOP_NO_ENGINE:-0}" != "1" ]; then
                 warn "пакета движка под $ARCH в релизе нет"
             fi
 
+            file_unowned /usr/bin/xkop && branch_install_remove
             if download "$XKOP_URL" "$WORK/xkop.$FORMAT" && pkg_install_file "$WORK/xkop.$FORMAT"; then
                 INSTALLED_FROM="release"
                 note "xkop установлен пакетом"
@@ -1058,7 +1077,7 @@ if [ -z "$INSTALLED_FROM" ]; then
     # Список полный и обязательный: /usr/bin/xkop подключает библиотеки все,
     # и недостающая означает не «без одной возможности», а команду, которая
     # не запускается вовсе. Полнота списка проверяется в tests/installer.test.sh.
-    XKOP_LIBS="constants.sh logging.sh lock.sh version.sh stats.sh stats.jq
+    XKOP_LIBS="constants.sh logging.sh lock.sh version.sh stats.sh stats.jq panel.sh
 subscription.sh subscription.jq config.sh config.jq config-bootstrap.jq lists.sh userlists.sh
 nft.sh dnsmasq.sh canary.sh nodes.sh diagnostics.sh explain.sh update.sh fleet-update.sh fleet-native.sh fleet-manifest.jq fleet-jobs.sh
 fleet-install.sh fleet-transaction.sh fleet-guardian.sh fleet-health.sh fleet-guardian.init
@@ -1218,7 +1237,11 @@ rm -rf "$WORK"
 say "проверка"
 /usr/bin/xkop version
 echo
-/usr/bin/xkop check_engine
+if engine_install_verified; then
+    engine_room_restore 1
+elif [ -n "$ENGINE_STASH" ]; then
+    warn "проверка установки не пройдена; резерв движка сохранён: $ENGINE_STASH"
+fi
 
 echo
 if [ -n "${HAVE:-}" ] && [ -n "${VERSION:-}" ] && [ "$HAVE" != "$VERSION" ]; then
@@ -1234,7 +1257,7 @@ echo "  /etc/init.d/xkop enable && /etc/init.d/xkop start"
 echo
 echo "  xkop get_status"
 echo
-if [ -s "$PANEL_ROOT/index.html" ]; then
+if [ -s "$PANEL_ROOT/index.html" ] && [ -n "$(uci -q get uhttpd."$PANEL_UHTTPD_SECTION".listen_https)" ]; then
     echo "Панель клиента:"
     panel_address | while read -r url; do echo "  $url"; done
     echo "  вход — пароль root от роутера"

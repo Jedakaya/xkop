@@ -26,34 +26,39 @@
 // на свою строку: «архитектура aarch64_cortex-a53» и следующей строкой
 // одинокое «apk», «память свободно 338.3 МБ» и следующей «из 485.1 МБ».
 // Читается это как ещё одно значение, а не как уточнение к предыдущему.
+// LuCI scalar children are HTML; subscription and RPC strings must be text.
+function textElement(tag, attrs, children) {
+  return E(tag, attrs, typeof children === "string" || typeof children === "number" ? [String(children)] : children);
+}
+
 function line(label, value, hint) {
-  return E("div", { class: "xkop-line" }, [
-    E("span", { class: "xkop-label" }, label),
-    E("span", { class: "xkop-right" }, [
-      E("span", { class: "xkop-value" }, value),
-      hint ? E("span", { class: "xkop-hint" }, hint) : "",
+  return textElement("div", { class: "xkop-line" }, [
+    textElement("span", { class: "xkop-label" }, label),
+    textElement("span", { class: "xkop-right" }, [
+      textElement("span", { class: "xkop-value" }, value),
+      hint ? textElement("span", { class: "xkop-hint" }, hint) : "",
     ]),
   ]);
 }
 
 function card(title, children, extraClass) {
-  return E("div", { class: "xkop-card " + (extraClass || "") }, [
-    E("h3", {}, title),
-    E("div", { class: "xkop-card-body" }, children),
+  return textElement("div", { class: "xkop-card " + (extraClass || "") }, [
+    textElement("h3", {}, title),
+    textElement("div", { class: "xkop-card-body" }, children),
   ]);
 }
 
 function widget(title, children) {
-  return E("div", { class: "xkop-widget" }, [
-    E("div", { class: "xkop-widget-title" }, title),
-    E("div", { class: "xkop-widget-body" }, children),
+  return textElement("div", { class: "xkop-widget" }, [
+    textElement("div", { class: "xkop-widget-title" }, title),
+    textElement("div", { class: "xkop-widget-body" }, children),
   ]);
 }
 
 function big(value, unit) {
-  return E("div", { class: "xkop-big" }, [
-    E("span", {}, value),
-    unit ? E("span", { class: "xkop-big-unit" }, " " + unit) : "",
+  return textElement("div", { class: "xkop-big" }, [
+    textElement("span", {}, value),
+    unit ? textElement("span", { class: "xkop-big-unit" }, " " + unit) : "",
   ]);
 }
 
@@ -103,14 +108,14 @@ function renderLists(lists) {
   });
 
   if (!subs.length && (lists.categories || []).length) {
-    rows.push(E("div", { class: "xkop-note" },
+    rows.push(textElement("div", { class: "xkop-note" },
       _("У выбранных категорий своих подсетей нет — они целиком по именам.")));
   }
 
   if (missing.length) {
-    rows.push(E("div", { class: "xkop-warn-text" },
+    rows.push(textElement("div", { class: "xkop-warn-text" },
       _("Не скачано: ") + missing.join(", ")));
-    rows.push(E("div", { class: "xkop-note" },
+    rows.push(textElement("div", { class: "xkop-note" },
       _("Эти сервисы живут на адресах, и без подсетей их трафик идёт мимо туннеля.")));
   }
 
@@ -123,9 +128,9 @@ function renderLists(lists) {
 function renderSummary(data) {
   const summary = (data && data.summary) || "состояние неизвестно";
   const good = summary === "работает";
-  return E("div", { class: "xkop-summary " + (good ? "xkop-good" : "xkop-warn") }, [
-    E("span", { class: "xkop-dot " + (good ? "xkop-dot-good" : "xkop-dot-warn") }, ""),
-    E("span", {}, summary),
+  return textElement("div", { class: "xkop-summary " + (good ? "xkop-good" : "xkop-warn") }, [
+    textElement("span", { class: "xkop-dot " + (good ? "xkop-dot-good" : "xkop-dot-warn") }, ""),
+    textElement("span", {}, summary),
   ]);
 }
 
@@ -138,16 +143,16 @@ function renderServiceWidget(data, refresh) {
   const running = !!(svc.engine && svc.engine.running);
 
   function act(action, label, style) {
-    return E("button", {
+    return textElement("button", {
       class: "cbi-button " + style,
       click: ui.createHandlerFn(this, function () {
         return api.service(action).then(function (r) {
           if (!r || !r.ok) {
             ui.addNotification(null,
-              E("p", {}, _("Не вышло: ") + ((r && r.error) || "?")), "error");
+              textElement("p", {}, _("Не вышло: ") + ((r && r.error) || "?")), "error");
           } else {
             // Показывается то, что стало, а не то, что мы просили сделать.
-            ui.addNotification(null, E("p", {}, _("Состояние: ") + (r.state || "?")),
+            ui.addNotification(null, textElement("p", {}, _("Состояние: ") + (r.state || "?")),
               r.engine && r.engine.running ? "info" : "warning");
           }
           return refresh();
@@ -161,7 +166,7 @@ function renderServiceWidget(data, refresh) {
     // Подпись — только если говорит что-то сверх крупной строки: «работает»
     // дважды подряд читалось как сбой вёрстки.
     (svc.state && svc.state !== (running ? _("работает") : _("остановлен")))
-      ? E("div", { class: "xkop-widget-note" }, svc.state) : "",
+      ? textElement("div", { class: "xkop-widget-note" }, svc.state) : "",
     line(_("движок"),
       eng.engine_installed ? "Xray " + (eng.engine_version || "?") : _("не установлен"),
       eng.engine_installed && eng.engine_version_ok === false ? _("версия ниже требуемой") : ""),
@@ -169,8 +174,8 @@ function renderServiceWidget(data, refresh) {
   ];
 
   if (!eng.engine_installed) {
-    body.push(E("div", { class: "xkop-warn-text" }, _("Без движка маршрутизировать нечем.")));
-    body.push(E("div", { class: "xkop-note" },
+    body.push(textElement("div", { class: "xkop-warn-text" }, _("Без движка маршрутизировать нечем.")));
+    body.push(textElement("div", { class: "xkop-note" },
       _("Поставить: xkop update, либо переустановить установщиком с GitHub.")));
   }
 
@@ -179,12 +184,12 @@ function renderServiceWidget(data, refresh) {
   // исчерпание дескрипторов, которое снаружи выглядело чем угодно другим.
   const log = (data && data.engine_log) || [];
   if (log.length) {
-    body.push(E("div", { class: "xkop-warn-text" }, _("Движок запущен, но не отвечает.")));
-    body.push(E("div", { class: "xkop-note" }, _("Его последние слова:")));
-    body.push(E("pre", { class: "xkop-log" }, log.join(String.fromCharCode(10))));
+    body.push(textElement("div", { class: "xkop-warn-text" }, _("Движок запущен, но не отвечает.")));
+    body.push(textElement("div", { class: "xkop-note" }, _("Его последние слова:")));
+    body.push(textElement("pre", { class: "xkop-log" }, log.join(String.fromCharCode(10))));
   }
 
-  body.push(E("div", { class: "xkop-controls" }, [
+  body.push(textElement("div", { class: "xkop-controls" }, [
     running ? act("restart", _("Перезапустить"), "cbi-button-apply")
             : act("start", _("Запустить"), "cbi-button-apply"),
     running ? act("stop", _("Остановить"), "cbi-button-reset") : "",
@@ -200,7 +205,7 @@ function renderServiceWidget(data, refresh) {
 // по жалобе клиента.
 function renderTrafficWidget(stats) {
   if (!stats || !stats.ok || !stats.distribution) {
-    return widget(_("Распределение"), E("div", { class: "xkop-empty" },
+    return widget(_("Распределение"), textElement("div", { class: "xkop-empty" },
       stats && stats.error ? _("Метрики недоступны: ") + stats.error
                            : _("Метрики недоступны")));
   }
@@ -215,38 +220,38 @@ function renderTrafficWidget(stats) {
   const any = parts.some(function (p) { return p.v && p.v.bytes > 0; });
 
   // Полоса вместо трёх процентов вразнобой: доля видна раньше, чем прочитана.
-  const bar = E("div", { class: "xkop-bar" },
+  const bar = textElement("div", { class: "xkop-bar" },
     any
       ? parts.map(function (p) {
           const share = (p.v && p.v.share) || 0;
-          return E("div", {
+          return textElement("div", {
             class: "xkop-bar-part " + p.css,
             style: "width:" + Math.max(0, share * 100) + "%",
             title: p.label + " " + api.percent(share),
           }, "");
         })
-      : [E("div", { class: "xkop-bar-part xkop-bar-empty", style: "width:100%" }, "")]);
+      : [textElement("div", { class: "xkop-bar-part xkop-bar-empty", style: "width:100%" }, "")]);
 
   const rows = parts.map(function (p) {
-    return E("div", { class: "xkop-legend" }, [
-      E("span", { class: "xkop-chip " + p.css }, ""),
-      E("span", { class: "xkop-legend-label" }, p.label),
-      E("span", { class: "xkop-legend-value" }, api.bytes((p.v && p.v.bytes) || 0)),
-      E("span", { class: "xkop-legend-share" }, api.percent((p.v && p.v.share) || 0)),
+    return textElement("div", { class: "xkop-legend" }, [
+      textElement("span", { class: "xkop-chip " + p.css }, ""),
+      textElement("span", { class: "xkop-legend-label" }, p.label),
+      textElement("span", { class: "xkop-legend-value" }, api.bytes((p.v && p.v.bytes) || 0)),
+      textElement("span", { class: "xkop-legend-share" }, api.percent((p.v && p.v.share) || 0)),
     ]);
   });
 
   if (d.service && d.service.bytes > 0) {
-    rows.push(E("div", { class: "xkop-legend xkop-legend-dim" }, [
-      E("span", { class: "xkop-chip xkop-bar-service" }, ""),
-      E("span", { class: "xkop-legend-label" }, _("служебное")),
-      E("span", { class: "xkop-legend-value" }, api.bytes(d.service.bytes)),
-      E("span", { class: "xkop-legend-share" }, api.percent(d.service.share)),
+    rows.push(textElement("div", { class: "xkop-legend xkop-legend-dim" }, [
+      textElement("span", { class: "xkop-chip xkop-bar-service" }, ""),
+      textElement("span", { class: "xkop-legend-label" }, _("служебное")),
+      textElement("span", { class: "xkop-legend-value" }, api.bytes(d.service.bytes)),
+      textElement("span", { class: "xkop-legend-share" }, api.percent(d.service.share)),
     ]));
   }
 
   if (!any) {
-    rows.push(E("div", { class: "xkop-note" }, _("Трафика ещё не было.")));
+    rows.push(textElement("div", { class: "xkop-note" }, _("Трафика ещё не было.")));
   }
 
   return widget(_("Распределение"), [bar].concat(rows));
@@ -256,7 +261,7 @@ function renderTrafficWidget(stats) {
 // единственное число, имеющее денежное выражение.
 function renderSavingsWidget(stats) {
   if (!stats || !stats.ok || !stats.distribution) {
-    return widget(_("Всего"), E("div", { class: "xkop-empty" }, _("Нет данных")));
+    return widget(_("Всего"), textElement("div", { class: "xkop-empty" }, _("Нет данных")));
   }
 
   // Трафик клиентов, а не всё, что отправил движок: пробы узлов на роутере
@@ -269,10 +274,10 @@ function renderSavingsWidget(stats) {
 
   return widget(_("Всего"), [
     big(api.bytes(total)),
-    E("div", { class: "xkop-widget-note" }, _("прошло через роутер")),
+    textElement("div", { class: "xkop-widget-note" }, _("прошло через роутер")),
     line(_("мимо туннеля"), api.bytes(saved),
       total > 0 ? api.percent(saved / total) : ""),
-    E("div", { class: "xkop-note" },
+    textElement("div", { class: "xkop-note" },
       _("Без распределения весь этот объём ушёл бы в туннель.")),
   ]);
 }
@@ -283,7 +288,7 @@ function renderRouterWidget(data) {
   const st = sys.storage || {};
 
   return widget(_("Роутер"), [
-    E("div", { class: "xkop-widget-note" }, r.model || _("модель неизвестна")),
+    textElement("div", { class: "xkop-widget-note" }, r.model || _("модель неизвестна")),
     line(_("система"), r.release || "—", ""),
     line(_("архитектура"), r.arch || "—", r.package_manager || ""),
     line(_("xkop"), sys.xkop_version || data.version || "—", ""),
@@ -304,7 +309,7 @@ function renderRules(nft) {
   if (nft.rules_present) {
     return widget(_("Правила"), [
       big(nft.packets_seen > 0 ? _("работают") : _("применены")),
-      E("div", { class: "xkop-widget-note" },
+      textElement("div", { class: "xkop-widget-note" },
         nft.packets_seen > 0
           ? _("пакетов через них: ") + nft.packets_seen
           : _("трафик через них ещё не шёл")),
@@ -314,19 +319,19 @@ function renderRules(nft) {
 
   const body = [
     big(_("не применены")),
-    E("div", { class: "xkop-warn-text" },
+    textElement("div", { class: "xkop-warn-text" },
       _("Трафик клиентов до движка не доходит.")),
   ];
 
   if (nft.tproxy_module === "missing") {
-    body.push(E("div", { class: "xkop-note" },
+    body.push(textElement("div", { class: "xkop-note" },
       _("Модуля ядра nft_tproxy нет. Поставить: apk add kmod-nft-tproxy (или opkg install).")));
   }
   if (nft.reason) {
-    body.push(E("div", { class: "xkop-note" }, _("nft ответил: ") + nft.reason));
+    body.push(textElement("div", { class: "xkop-note" }, _("nft ответил: ") + nft.reason));
   }
   if (!nft.reason && nft.tproxy_module !== "missing") {
-    body.push(E("div", { class: "xkop-note" },
+    body.push(textElement("div", { class: "xkop-note" },
       _("Причина не записана — правила ещё не применялись в этой загрузке.")));
   }
 
@@ -337,7 +342,7 @@ function renderRules(nft) {
 // чисел в миллисекундах; задержки раскрываются по требованию.
 function renderPool(nodes, refresh) {
   if (!nodes || !nodes.ok) {
-    return card(_("Пул серверов"), E("div", { class: "xkop-empty" }, _("Нет данных")));
+    return card(_("Пул серверов"), textElement("div", { class: "xkop-empty" }, _("Нет данных")));
   }
 
   const list = nodes.nodes || [];
@@ -369,12 +374,12 @@ function renderPool(nodes, refresh) {
   // Правило выбора говорится вслух. Иначе смена узла выглядит произволом,
   // а несмена — поломкой.
   if (nodes.selection !== "manual") {
-    head.push(E("div", { class: "xkop-note" },
+    head.push(textElement("div", { class: "xkop-note" },
       _("Узел не меняется, пока жив и не проигрывает лучшему больше допуска. Допуск и порог задержки — во вкладке «Система».")));
   }
 
   if (!list.length) {
-    head.push(E("div", { class: "xkop-note" },
+    head.push(textElement("div", { class: "xkop-note" },
       _("Пул пуст: задайте ссылку подписки во вкладке «Подписки».")));
     return card(_("Пул серверов"), head);
   }
@@ -392,15 +397,15 @@ function renderPool(nodes, refresh) {
   };
 
 
-  const details = E("details", { class: "xkop-details" }, [
-    E("summary", {}, _("Показать узлы") + " (" + list.length + ")"),
-    E("table", { class: "table" }, [
-      E("tr", { class: "tr table-titles" }, [
-        E("th", { class: "th" }, _("узел")),
-        E("th", { class: "th" }, _("состояние")),
-        E("th", { class: "th" }, _("задержка")),
-        E("th", { class: "th" }, _("проверок")),
-        E("th", { class: "th" }, ""),
+  const details = textElement("details", { class: "xkop-details" }, [
+    textElement("summary", {}, _("Показать узлы") + " (" + list.length + ")"),
+    textElement("table", { class: "table" }, [
+      textElement("tr", { class: "tr table-titles" }, [
+        textElement("th", { class: "th" }, _("узел")),
+        textElement("th", { class: "th" }, _("состояние")),
+        textElement("th", { class: "th" }, _("задержка")),
+        textElement("th", { class: "th" }, _("проверок")),
+        textElement("th", { class: "th" }, ""),
       ]),
     ].concat(
       list.map(function (n) {
@@ -411,20 +416,20 @@ function renderPool(nodes, refresh) {
         const probes = (n.probes === null || n.probes === undefined) ? "—"
           : (n.failures ? n.probes + " (" + _("отказов ") + n.failures + ")" : String(n.probes));
 
-        return E("tr", { class: "tr" + (current ? " xkop-row-current" : "") }, [
-          E("td", { class: "td" }, [
-            E("div", {}, n.tag),
+        return textElement("tr", { class: "tr" + (current ? " xkop-row-current" : "") }, [
+          textElement("td", { class: "td" }, [
+            textElement("div", {}, n.tag),
             n.state === "dead" && n.last_error
-              ? E("div", { class: "xkop-hint-wrap" }, n.last_error) : "",
+              ? textElement("div", { class: "xkop-hint-wrap" }, n.last_error) : "",
           ]),
-          E("td", { class: "td xkop-state-" + n.state }, states[n.state] || n.state),
-          E("td", { class: "td" }, n.delay_ms === null || n.delay_ms === undefined
+          textElement("td", { class: "td xkop-state-" + n.state }, states[n.state] || n.state),
+          textElement("td", { class: "td" }, n.delay_ms === null || n.delay_ms === undefined
             ? "—" : n.delay_ms + " мс"),
-          E("td", { class: "td" }, probes),
-          E("td", { class: "td" }, [
+          textElement("td", { class: "td" }, probes),
+          textElement("td", { class: "td" }, [
             current
-              ? E("span", { class: "xkop-hint" }, _("выбран"))
-              : E("button", {
+              ? textElement("span", { class: "xkop-hint" }, _("выбран"))
+              : textElement("button", {
                   class: "cbi-button cbi-button-apply",
                   click: ui.createHandlerFn(this, function () {
                     return api.select(n.tag).then(refresh);
@@ -436,8 +441,8 @@ function renderPool(nodes, refresh) {
     )),
   ]);
 
-  const controls = E("div", { class: "xkop-controls" }, [
-    E("button", {
+  const controls = textElement("div", { class: "xkop-controls" }, [
+    textElement("button", {
       class: "cbi-button cbi-button-neutral",
       click: ui.createHandlerFn(this, function () {
         return api.select("auto").then(refresh);
@@ -452,8 +457,8 @@ function renderPool(nodes, refresh) {
 // придумывается: «достигнут лимит устройств» — не то же самое, что
 // «серверов нет», и чинится иначе.
 function renderSubscriptions(subs, refresh) {
-  const update = E("div", { class: "xkop-controls" }, [
-    E("button", {
+  const update = textElement("div", { class: "xkop-controls" }, [
+    textElement("button", {
       class: "cbi-button cbi-button-action",
       click: ui.createHandlerFn(this, function () {
         // Ответ команды — список подписок, а не объект с ok. Кнопка ждала ok
@@ -462,13 +467,13 @@ function renderSubscriptions(subs, refresh) {
         return api.subscriptionUpdate().then(function (r) {
           if (!Array.isArray(r)) {
             ui.addNotification(null,
-              E("p", {}, _("Не вышло: ") + ((r && r.error) || _("нет ответа"))), "warning");
+              textElement("p", {}, _("Не вышло: ") + ((r && r.error) || _("нет ответа"))), "warning");
             return refresh();
           }
           const names = { ready: _("готова"), stale: _("устаревает"), empty: _("пустая"),
             rejected: _("отвергнута"), blocked: _("отказ панели"), absent: _("не задана") };
           const good = r.every(function (s) { return s.state === "ready"; });
-          ui.addNotification(null, E("p", {}, r.length
+          ui.addNotification(null, textElement("p", {}, r.length
             ? r.map(function (s) {
                 return s.subscription + ": " + (names[s.state] || s.state)
                   + ", " + (s.servers || 0) + _(" серверов");
@@ -482,8 +487,8 @@ function renderSubscriptions(subs, refresh) {
 
   if (!subs || !subs.length) {
     return card(_("Подписки"), [
-      E("div", { class: "xkop-empty" }, _("Подписок нет")),
-      E("div", { class: "xkop-note" },
+      textElement("div", { class: "xkop-empty" }, _("Подписок нет")),
+      textElement("div", { class: "xkop-note" },
         _("Добавить можно во вкладке «Подписки».")),
     ]);
   }
@@ -503,10 +508,14 @@ function renderSubscriptions(subs, refresh) {
     ];
 
     if (s.panel && s.panel.announce) {
-      rows.push(E("div", { class: "xkop-note" }, s.panel.announce));
+      rows.push(textElement("div", { class: "xkop-note" }, s.panel.announce));
     }
     if (s.state !== "ready" && s.reason) {
-      rows.push(E("div", { class: "xkop-warn-text" }, _("причина: ") + s.reason));
+      const reasons = {
+        resource_limit: _("ответ подписки превышает допустимый размер"),
+        cache_write_failed: _("не удалось сохранить подписку; используется прежняя копия"),
+      };
+      rows.push(textElement("div", { class: "xkop-warn-text" }, _("причина: ") + (reasons[s.reason] || s.reason)));
     }
     if (s.userinfo && s.userinfo.total > 0) {
       rows.push(line(_("трафик"),
@@ -517,7 +526,7 @@ function renderSubscriptions(subs, refresh) {
       rows.push(line(_("действует до"),
         new Date(s.userinfo.expire * 1000).toLocaleDateString(), ""));
     }
-    return E("div", { class: "xkop-sub" }, rows);
+    return textElement("div", { class: "xkop-sub" }, rows);
   }).concat([update]));
 }
 
@@ -527,19 +536,19 @@ function renderCanary(canary) {
   if (!canary || !canary.ok) return "";
 
   if (canary.state === "disabled") {
-    return card(_("Канарейка"), E("div", { class: "xkop-empty" }, _("Выключена")));
+    return card(_("Канарейка"), textElement("div", { class: "xkop-empty" }, _("Выключена")));
   }
   if (canary.state === "unknown") {
-    return card(_("Канарейка"), E("div", { class: "xkop-empty" },
+    return card(_("Канарейка"), textElement("div", { class: "xkop-empty" },
       _("Проверить не удалось — это не то же самое, что «сеть чистая»")));
   }
   if (!canary.hijacked) {
-    return card(_("Канарейка"), E("div", {}, _("Подмены DNS не обнаружено")));
+    return card(_("Канарейка"), textElement("div", {}, _("Подмены DNS не обнаружено")));
   }
 
   const rows = [
-    E("div", { class: "xkop-warn-text" }, _("Провайдер подменяет DNS-ответы.")),
-    E("div", {}, _("Выучены заглушки: ") + (canary.learned || []).join(", ")),
+    textElement("div", { class: "xkop-warn-text" }, _("Провайдер подменяет DNS-ответы.")),
+    textElement("div", {}, _("Выучены заглушки: ") + (canary.learned || []).join(", ")),
   ];
 
   // Обнаружение и противодействие — разные вещи, и путать их нельзя.
@@ -550,12 +559,12 @@ function renderCanary(canary) {
   // о перехвате и ничему не мешает. Молчать об этом значит выдавать
   // обнаружение за защиту.
   if (canary.dns_mode === "fakeip") {
-    rows.push(E("div", { class: "xkop-note" },
+    rows.push(textElement("div", { class: "xkop-note" },
       _("Ответы с этими адресами движок отбраковывает сам, откуда бы они ни пришли.")));
   } else {
-    rows.push(E("div", { class: "xkop-warn-text" },
+    rows.push(textElement("div", { class: "xkop-warn-text" },
       _("Роутер этому сейчас не мешает.")));
-    rows.push(E("div", { class: "xkop-note" },
+    rows.push(textElement("div", { class: "xkop-note" },
       _("В режиме «не трогать» имена разрешает dnsmasq напрямую, и движок в этом не участвует. Отбраковка подменённых ответов включается вместе с режимом поддельных адресов: вкладка DNS, «Режим».")));
   }
 
@@ -565,12 +574,12 @@ function renderCanary(canary) {
 // Главная функция: почему этот сайт ведёт себя так, а не иначе. Ответ —
 // наблюдение за тем, что движок сделал, а не наше прочтение своих правил.
 function renderExplain() {
-  const input = E("input", {
+  const input = textElement("input", {
     type: "text",
     class: "cbi-input-text",
     placeholder: "example.com",
   });
-  const output = E("div", { class: "xkop-explain-out" });
+  const output = textElement("div", { class: "xkop-explain-out" });
 
   function ask() {
     const domain = (input.value || "").trim();
@@ -580,7 +589,7 @@ function renderExplain() {
       while (output.firstChild) output.removeChild(output.firstChild);
 
       if (!r.ok) {
-        output.appendChild(E("div", { class: "xkop-warn-text" },
+        output.appendChild(textElement("div", { class: "xkop-warn-text" },
           r.error === "access_log_off"
             ? _("Журнал доступа выключен, наблюдать нечем")
             : _("Не получилось: ") + r.error));
@@ -606,12 +615,12 @@ function renderExplain() {
         output.appendChild(line(_("по правилам"), r.rule.target || "—",
           r.rule.certain ? "" : _("наблюдением не подтверждено")));
         if ((r.rule.matched || []).length) {
-          output.appendChild(E("div", { class: "xkop-note" },
+          output.appendChild(textElement("div", { class: "xkop-note" },
             _("совпало: ") + r.rule.matched.join(", ")));
         }
       }
       if (!r.observed && r.state) {
-        output.appendChild(E("div", { class: "xkop-note" }, r.state));
+        output.appendChild(textElement("div", { class: "xkop-note" }, r.state));
       }
       if (r.node) {
         output.appendChild(line(_("узел"), r.node.tag,
@@ -627,22 +636,22 @@ function renderExplain() {
     if (ev.key === "Enter") { ev.preventDefault(); ask(); }
   });
 
-  const button = E("button", {
+  const button = textElement("button", {
     class: "cbi-button cbi-button-action",
     click: ui.createHandlerFn(this, ask),
   }, _("Разобрать"));
 
   return card(_("Разбор маршрута"), [
-    E("div", { class: "xkop-note" },
+    textElement("div", { class: "xkop-note" },
       _("Куда уходит имя и почему. Ответ берётся из того, что движок сделал с пробным соединением.")),
-    E("div", { class: "xkop-explain" }, [input, button]),
+    textElement("div", { class: "xkop-explain" }, [input, button]),
     output,
   ]);
 }
 
 return L.Class.extend({
   render: function () {
-    const root = E("div", { class: "xkop-dashboard" });
+    const root = textElement("div", { class: "xkop-dashboard" });
 
     // Страница разбита на части, и обновляется только та, что изменилась.
     //
@@ -654,7 +663,7 @@ return L.Class.extend({
     const slots = {};
 
     function slot(name, node) {
-      const box = E("div", { class: "xkop-slot" }, node ? [node] : []);
+      const box = textElement("div", { class: "xkop-slot" }, node ? [node] : []);
       slots[name] = { box: box, sig: null };
       root.appendChild(box);
       return box;
@@ -676,7 +685,7 @@ return L.Class.extend({
     function paint(data) {
       if (!data || !data.ok) {
         fill("summary", "нет ответа", function () {
-          return E("div", { class: "xkop-summary xkop-warn" },
+          return textElement("div", { class: "xkop-summary xkop-warn" },
             _("Роутер не ответил: ") + ((data && data.error) || "?"));
         });
         return;
@@ -752,10 +761,10 @@ return L.Class.extend({
 
     return api.dashboard().then(function (data) {
       slot("summary");
-      const widgets = E("div", { class: "xkop-widgets" });
+      const widgets = textElement("div", { class: "xkop-widgets" });
       root.appendChild(widgets);
       ["service", "traffic", "savings", "rules", "router"].forEach(function (name) {
-        const box = E("div", { class: "xkop-slot" });
+        const box = textElement("div", { class: "xkop-slot" });
         slots[name] = { box: box, sig: null };
         widgets.appendChild(box);
       });

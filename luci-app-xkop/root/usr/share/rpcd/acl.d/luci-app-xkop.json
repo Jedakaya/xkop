@@ -3,8 +3,7 @@
     "description": "Доступ к настройкам и командам xkop",
     "read": {
       "file": {
-        "/usr/bin/xkop": [ "exec" ],
-        "/etc/init.d/xkop": [ "exec" ]
+        "/usr/libexec/xkop-read": [ "exec" ]
       },
       "ubus": {
         "service": [ "list" ]
@@ -12,6 +11,10 @@
       "uci": [ "xkop" ]
     },
     "write": {
+      "file": {
+        "/usr/bin/xkop": [ "exec" ],
+        "/etc/init.d/xkop": [ "exec" ]
+      },
       "uci": [ "xkop" ]
     }
   }

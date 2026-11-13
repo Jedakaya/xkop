@@ -5,9 +5,10 @@ set -eu
 ROOT=${ROOT:-$(dirname "$0")/..}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-awk '/^[ ]*ENGINE_HAVE=/ {copy=1} /^[ ]*if download "\$XKOP_URL"/ {copy=0} copy' "$ROOT/install.sh" > "$work/branch"
+awk '/^[ ]*ENGINE_HAVE=/ {copy=1} /^[ ]*file_unowned \/usr\/bin\/xkop/ {copy=0} /^[ ]*if download "\$XKOP_URL"/ {copy=0} copy' "$ROOT/install.sh" > "$work/branch"
 note() { printf 'NOTE %s\n' "$*"; }
 warn() { printf 'WARN %s\n' "$*"; }
+die() { printf 'ERROR %s\n' "$*"; exit 1; }
 engine_version() { printf '%s' "$HAVE"; }
 engine_pkg_version() { printf '%s' "$HAVE"; }
 engine_version_core() { printf '%s' "$1"; }
@@ -24,7 +25,7 @@ for FORMAT in apk ipk; do
         echo "FAIL $FORMAT: installed engine incorrectly reported missing"; exit 1
     fi
     HAVE=26.9.9
-    ( . "$work/branch" ) > "$work/old"
+    if ( . "$work/branch" ) > "$work/old"; then echo 'FAIL failed download accepted'; exit 1; fi
     grep -q '^DOWNLOAD' "$work/old"
     ENGINE_URL=''
     ( . "$work/branch" ) > "$work/missing"
