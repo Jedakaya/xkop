@@ -13,10 +13,11 @@ cp -R "$ROOT/client-panel/." "$t/stage/"
 chmod 755 "$t/live/cgi-bin/"* "$t/stage/cgi-bin/"*
 echo 'old-release' >> "$t/live/index.html"
 echo 'new-release' >> "$t/stage/index.html"
-command mv "$t/stage/cgi-bin/auth" "$t/auth"
+mv_binary=$(command -v mv)
+"$mv_binary" "$t/stage/cgi-bin/auth" "$t/auth"
 if panel_publish_bundle "$t/stage" "$t/live"; then echo 'FAIL incomplete candidate published'; exit 1; fi
 tail -n 1 "$t/live/index.html" | grep -qx old-release
-command mv "$t/auth" "$t/stage/cgi-bin/auth"
+"$mv_binary" "$t/auth" "$t/stage/cgi-bin/auth"
 mv() {
     if [ "$1" = "$t/stage" ]; then return 1; fi
     command mv "$@"
