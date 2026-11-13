@@ -9,12 +9,14 @@ on:
       - 'xkop/files/usr/bin/**'
       - 'xkop/files/usr/lib/**'
       - 'tools/**'
+      - 'tests/**'
       - '.github/workflows/shellcheck.yml'
   pull_request:
     paths:
       - 'xkop/files/usr/bin/**'
       - 'xkop/files/usr/lib/**'
       - 'tools/**'
+      - 'tests/**'
       - '.github/workflows/shellcheck.yml'
 
 permissions:

@@ -25,6 +25,8 @@ nft() {
  esac
 }
 : > "$work/table"
+# Uses nft.sh here; the later mock tests service_prepare without touching networking.
+# shellcheck disable=SC2218
 nft_apply >/dev/null 2>&1
 check test -f "$work/table"
 check grep -q '^delete table inet ' "$work/transaction"

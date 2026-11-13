@@ -64,10 +64,13 @@ printf 'xray-xkop 26.9.9-r2\nxkop 0.2.24-r1\nluci-app-xkop 0.2.24-r1\n' > "$XKOP
 update_restore_file() { printf '%s\n' "$2" >> "$lab/restored"; [ "$2" != "${FAIL_PACKAGE:-}" ]; }
 engine_wait() { return 0; }
 FAIL_PACKAGE=xray-xkop
+# Uses the sourced implementation; the later definition injects a different failure.
+# shellcheck disable=SC2218
 update_rollback; rc=$?
 check 'one failed restore fails whole rollback' 1 "$rc"
 check 'engine included in rollback' yes "$(grep -qx xray-xkop "$lab/restored" && echo yes || echo no)"
 FAIL_PACKAGE=
+# shellcheck disable=SC2218
 update_rollback; rc=$?
 check 'all exact versions and health restored' 0 "$rc"
 update_prepare_ram() { :; }; update_reclaim_flash() { :; }; update_latest_json() { :; }
