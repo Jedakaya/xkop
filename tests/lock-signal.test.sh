@@ -45,6 +45,7 @@ lock_release work
 mkdir -p "$work/lock-work"
 echo 999999 > "$work/lock-work/pid"
 pids=''
+: > "$work/winners"
 for contender in 1 2 3 4; do
  (
   if lock_acquire work; then
@@ -56,5 +57,6 @@ for contender in 1 2 3 4; do
  pids="$pids $!"
 done
 for pid in $pids; do wait "$pid"; done
-[ "$(wc -l < "$work/winners" | tr -d ' ')" = 1 ] || { echo 'FAIL multiple stale contenders acquired lock'; exit 1; }
+winners=$(wc -l < "$work/winners" | tr -d ' ')
+[ "$winners" = 1 ] || { echo "FAIL stale contenders: expected 1 owner, got $winners"; exit 1; }
 echo 'ok TERM stops worker and foreign release preserves owner'

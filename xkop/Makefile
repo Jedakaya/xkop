@@ -58,6 +58,12 @@ define Package/xkop/install
 	$(INSTALL_DIR) $(1)/usr/lib/xkop
 	$(CP) ./files/usr/lib/xkop/* $(1)/usr/lib/xkop/
 
+	# Package-owned assets follow ordinary and fleet updates and their rollback.
+	# Presence of this bundle does not enable the optional uhttpd instance.
+	$(INSTALL_DIR) $(1)/usr/share/xkop/client-panel/cgi-bin
+	$(INSTALL_DATA) ./client-panel/index.html $(1)/usr/share/xkop/client-panel/index.html
+	$(INSTALL_BIN) ./client-panel/cgi-bin/* $(1)/usr/share/xkop/client-panel/cgi-bin/
+
 	# Что обязано пережить обновление прошивки. sysupgrade сохраняет
 	# /etc/config и то, что пакеты назвали в keep.d — так делают dnsmasq
 	# и uhttpd. Всё наше состояние лежит вне /etc/config.
@@ -91,11 +97,8 @@ if [ -x /etc/init.d/xkop-fleet ]; then
 	/etc/init.d/xkop-fleet stop 2>/dev/null || exit 1
 fi
 
-# Панель клиента — не файлы пакета, а отдельный экземпляр uhttpd, заведённый
-# нами в uci. Пакет его не унесёт: удаление пакета оставляло слушателя
-# на порту 8090, который отдаёт каталог, которого больше нет.
-#
-# Функция для этого была написана и не вызывалась ниоткуда - её нашёл аудит.
+# Stop the optional listener before replacing/removing its package-owned assets.
+# The activation marker is user state and survives package upgrades/rollback.
 if [ -r /usr/lib/xkop/constants.sh ] && [ -r /usr/lib/xkop/service.sh ]; then
 	. /usr/lib/xkop/constants.sh 2>/dev/null
 	. /usr/lib/xkop/logging.sh 2>/dev/null

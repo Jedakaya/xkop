@@ -60,7 +60,7 @@ check "установщик сбрасывает кэш LuCI" "yes" \
 
 # Файлы панели никого не обслуживают сами по себе.
 check "установщик поднимает панель" "yes" \
-    "$(grep -q 'panel_tls_configure ' "$ROOT/install.sh" && echo yes || echo no)"
+    "$(grep -q 'panel_configure_bundle ' "$ROOT/install.sh" && echo yes || echo no)"
 
 # Функция в файле службы обязана быть хуком, который rc.common вызывает.
 #

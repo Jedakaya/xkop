@@ -439,8 +439,7 @@ service_prepare() {
 
     service_network_apply || return 1
 
-    # Панель отдаётся, только если её файлы на месте: пакет её не несёт,
-    # её кладёт установщик или выкладка со стенда.
+    # Package assets alone never opt a router into the optional client panel.
     panel_present && panel_configure_uhttpd
 
     return 0
@@ -968,16 +967,16 @@ service_status_json() {
 panel_configure_uhttpd() {
     # shellcheck source=/dev/null
     . "$XKOP_LIB_DIR/panel.sh"
-    panel_tls_configure "$XKOP_PANEL_ROOT" "$XKOP_PANEL_SECTION" "$XKOP_PANEL_PORT"
+    panel_configure_bundle "$XKOP_PANEL_ROOT" "$XKOP_PANEL_BUNDLE" "$XKOP_PANEL_MARKER" \
+        "$XKOP_PANEL_SECTION" "$XKOP_PANEL_PORT"
 }
 
 panel_remove_uhttpd() {
-    uci -q get "uhttpd.$XKOP_PANEL_SECTION" > /dev/null 2>&1 || return 0
-    uci -q delete "uhttpd.$XKOP_PANEL_SECTION"
-    uci -q commit uhttpd
-    /etc/init.d/uhttpd reload > /dev/null 2>&1
+    # shellcheck source=/dev/null
+    . "$XKOP_LIB_DIR/panel.sh"
+    panel_disable "$XKOP_PANEL_ROOT" "$XKOP_PANEL_SECTION" "$XKOP_PANEL_BUNDLE"
 }
 
 panel_present() {
-    [ -s "$XKOP_PANEL_ROOT/index.html" ] && [ -x "$XKOP_PANEL_ROOT/cgi-bin/status" ]
+    [ -f "$XKOP_PANEL_MARKER" ] || [ -s "$XKOP_PANEL_ROOT/index.html" ]
 }

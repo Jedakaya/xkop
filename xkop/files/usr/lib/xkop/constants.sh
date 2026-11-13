@@ -81,5 +81,7 @@ XKOP_PROBE_PORT='10809'
 # from it may still have that one taken, and two panels answering on the same
 # port is a confusion nobody needs while debugging.
 XKOP_PANEL_ROOT='/www-xkop'
+XKOP_PANEL_BUNDLE='/usr/share/xkop/client-panel'
+XKOP_PANEL_MARKER='/etc/xkop/panel-enabled'
 XKOP_PANEL_PORT='8090'
 XKOP_PANEL_SECTION='xkop_panel'

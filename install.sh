@@ -35,6 +35,8 @@ XKOP_REF=${XKOP_REF:-main}
 XKOP_PANEL=${XKOP_PANEL:-0}
 XKOP_LIB_DIR=/usr/lib/xkop
 PANEL_ROOT=/www-xkop
+PANEL_BUNDLE=/usr/share/xkop/client-panel
+PANEL_MARKER=/etc/xkop/panel-enabled
 PANEL_PORT=8090
 PANEL_UHTTPD_SECTION=xkop_panel
 WORK=/tmp/xkop-install
@@ -552,7 +554,8 @@ configure_panel_uhttpd() {
     fi
     # shellcheck source=/dev/null
     . "$XKOP_LIB_DIR/panel.sh"
-    panel_tls_configure "$PANEL_ROOT" "$PANEL_UHTTPD_SECTION" "$PANEL_PORT"
+    panel_configure_bundle "$PANEL_ROOT" "$PANEL_BUNDLE" "$PANEL_MARKER" \
+        "$PANEL_UHTTPD_SECTION" "$PANEL_PORT"
 }
 
 PANEL_CGI_FILES="_common auth status subscription-set subscription-update routes route-set node-select explain"
@@ -572,27 +575,40 @@ download_panel_into() {
     return 0
 }
 
-# Собирается в RAM и переезжает только когда приехал каждый файл: загрузка,
-# умершая на середине, не имеет права оставить панель наполовину заменённой.
+# Package installs use their version-owned bundle. Only explicit branch installs
+# fetch separate assets, stage them beside the destination and publish by rename.
 install_client_panel() {
-    staging="/tmp/xkop-panel.$$"
-    rm -rf "$staging"
-
-    if ! download_panel_into "$staging"; then
-        rm -rf "$staging"
-        warn "панель не скачалась целиком, xkop это переживёт"
+    local staging
+    if [ ! -r "$XKOP_LIB_DIR/panel.sh" ]; then
+        configure_panel_uhttpd
         return 1
     fi
-
-    mkdir -p "$PANEL_ROOT" || { rm -rf "$staging"; return 1; }
-    rm -rf "$PANEL_ROOT/cgi-bin"
-    cp "$staging/index.html" "$PANEL_ROOT/index.html"
-    cp -r "$staging/cgi-bin" "$PANEL_ROOT/cgi-bin"
-    chmod 755 "$PANEL_ROOT/cgi-bin"/*
-    rm -rf "$staging"
-
-    if [ ! -x /etc/init.d/uhttpd ]; then
-        warn "uhttpd не найден, панель обслуживать некому"
+    # shellcheck source=/dev/null
+    . "$XKOP_LIB_DIR/panel.sh"
+    if [ "${INSTALLED_FROM:-}" = branch ]; then
+        mkdir -p "$(dirname "$PANEL_BUNDLE")" || return 1
+        staging=$(mktemp -d "$PANEL_BUNDLE.download.XXXXXX") || return 1
+        if ! download_panel_into "$staging" || ! chmod 755 "$staging/cgi-bin/"* \
+            || ! panel_bundle_valid "$staging"; then
+            rm -rf "$staging"
+            panel_disable "$PANEL_ROOT" "$PANEL_UHTTPD_SECTION" "$PANEL_BUNDLE" || return 1
+            warn "панель не скачалась целиком; прежние файлы сохранены, панель отключена"
+            return 1
+        fi
+        panel_disable "$PANEL_ROOT" "$PANEL_UHTTPD_SECTION" "$PANEL_BUNDLE" || { rm -rf "$staging"; return 1; }
+        if ! panel_publish_bundle "$staging" "$PANEL_BUNDLE"; then
+            rm -rf "$staging"
+            warn "панель не обновлена; прежние файлы сохранены, панель отключена"
+            return 1
+        fi
+    fi
+    if ! panel_bundle_valid "$PANEL_BUNDLE"; then
+        panel_disable "$PANEL_ROOT" "$PANEL_UHTTPD_SECTION" "$PANEL_BUNDLE" || return 1
+        warn "панель отключена: комплект файлов пакета отсутствует или повреждён"
+        return 1
+    fi
+    if ! panel_mark_enabled "$PANEL_MARKER"; then
+        panel_disable "$PANEL_ROOT" "$PANEL_UHTTPD_SECTION" "$PANEL_BUNDLE" || return 1
         return 1
     fi
 
@@ -1225,7 +1241,7 @@ fi
 # Ставится по желанию: владельцу роутера она не нужна, у него LuCI, а лишний
 # экземпляр uhttpd — это память и открытый порт. Уже стоящая обновляется,
 # чтобы не остаться старой рядом с новым xkop.
-if [ "$XKOP_PANEL" = "1" ] || [ -s "$PANEL_ROOT/index.html" ]; then
+if [ "$XKOP_PANEL" = "1" ] || [ -f "$PANEL_MARKER" ] || [ -s "$PANEL_ROOT/index.html" ]; then
     say "панель клиента"
     install_client_panel || true
 fi
@@ -1257,7 +1273,7 @@ echo "  /etc/init.d/xkop enable && /etc/init.d/xkop start"
 echo
 echo "  xkop get_status"
 echo
-if [ -s "$PANEL_ROOT/index.html" ] && [ -n "$(uci -q get uhttpd."$PANEL_UHTTPD_SECTION".listen_https)" ]; then
+if [ -f "$PANEL_MARKER" ] && [ -n "$(uci -q get uhttpd."$PANEL_UHTTPD_SECTION".listen_https)" ]; then
     echo "Панель клиента:"
     panel_address | while read -r url; do echo "  $url"; done
     echo "  вход — пароль root от роутера"

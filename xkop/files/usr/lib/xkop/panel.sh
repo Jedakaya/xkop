@@ -3,8 +3,89 @@
 # Shared by the installer and service. No implicit package installation or HTTP
 # fallback: use the existing LuCI certificate and uhttpd TLS backend.
 
+panel_bundle_valid() {
+    local bundle="$1" name
+    [ -r "$bundle/index.html" ] && [ -s "$bundle/index.html" ] || return 1
+    for name in _common auth status subscription-set subscription-update routes route-set node-select explain; do
+        [ -r "$bundle/cgi-bin/$name" ] && [ -s "$bundle/cgi-bin/$name" ] \
+            && [ -x "$bundle/cgi-bin/$name" ] || return 1
+        sh -n "$bundle/cgi-bin/$name" || return 1
+    done
+}
+
+panel_publish_bundle() {
+    local staged="$1" bundle="$2" backup
+    panel_bundle_valid "$staged" || return 1
+    # The installer stages beside the destination. The listener is stopped
+    # before these renames, so neither failures nor a crash expose mixed CGI.
+    backup=$(mktemp -d "$bundle.previous.XXXXXX") || return 1
+    if [ -e "$bundle" ] && ! mv "$bundle" "$backup/bundle"; then
+        rmdir "$backup" 2>/dev/null || :
+        return 1
+    fi
+    if ! mv "$staged" "$bundle"; then
+        if [ -d "$backup/bundle" ] && ! mv "$backup/bundle" "$bundle"; then
+            echo "xkop: panel restore failed; previous bundle preserved in $backup" >&2
+            return 1
+        fi
+        rmdir "$backup" 2>/dev/null || :
+        return 1
+    fi
+    rm -rf "$backup"
+}
+
+panel_mark_enabled() (
+    local marker="$1" tmp
+    umask 077
+    mkdir -p "$(dirname "$marker")" || return 1
+    tmp=$(mktemp "$marker.XXXXXX") || return 1
+    if ! { printf 'enabled\n' > "$tmp" && mv -f "$tmp" "$marker"; }; then
+        rm -f "$tmp"
+        return 1
+    fi
+)
+
+panel_disable() {
+    local legacy="$1" section="$2" bundle="${3:-}" changed=0 home
+    if uci -q get "uhttpd.$section.home" >/dev/null 2>&1; then
+        uci -q delete "uhttpd.$section" || return 1
+        changed=1
+    fi
+    home=$(uci -q get uhttpd.xkop.home 2>/dev/null) || home=
+    if [ "$section" != xkop ] && [ -n "$home" ] \
+        && { [ "$home" = "$legacy" ] || [ "$home" = "$bundle" ]; }; then
+        uci -q delete uhttpd.xkop || return 1
+        changed=1
+    fi
+    [ "$changed" -eq 1 ] || return 0
+    uci commit uhttpd && /etc/init.d/uhttpd reload >/dev/null 2>&1
+}
+
+panel_configure_bundle() {
+    local legacy="$1" bundle="$2" marker="$3" section="$4" port="$5"
+    # The bundle is installed on every router, but activation is opt-in state.
+    [ -f "$marker" ] || [ -s "$legacy/index.html" ] || return 0
+    if ! panel_bundle_valid "$bundle"; then
+        panel_disable "$legacy" "$section" "$bundle" || return 1
+        echo 'xkop: client panel disabled; package panel bundle is incomplete' >&2
+        return 1
+    fi
+    if [ ! -f "$marker" ] && ! panel_mark_enabled "$marker"; then
+        panel_disable "$legacy" "$section" "$bundle" || return 1
+        return 1
+    fi
+    if [ "$(uci -q get "uhttpd.$section.home" 2>/dev/null)" != "$bundle" ]; then
+        # Retire credentials issued by the legacy standalone authentication CGI.
+        if ! rm -f /tmp/xkop-panel-token; then
+            panel_disable "$legacy" "$section" "$bundle" || return 1
+            return 1
+        fi
+    fi
+    panel_tls_configure "$bundle" "$section" "$port" "$legacy"
+}
+
 panel_tls_configure() {
-    local root="$1" section="$2" port="$3" cert key changed=0 ready=1
+    local root="$1" section="$2" port="$3" legacy="${4:-$1}" cert key changed=0 ready=1 home
     command -v uci >/dev/null 2>&1 || return 1
     [ -x /etc/init.d/uhttpd ] && [ -s "$root/index.html" ] || return 1
     cert=$(uci -q get uhttpd.main.cert 2>/dev/null) || cert=
@@ -15,7 +96,8 @@ panel_tls_configure() {
     [ -r /lib/libustream-ssl.so ] || [ -r /usr/lib/libustream-ssl.so ] || ready=0
     command -v ubus >/dev/null 2>&1 || ready=0
 
-    if [ "$section" != xkop ] && [ "$(uci -q get uhttpd.xkop.home 2>/dev/null)" = "$root" ]; then
+    home=$(uci -q get uhttpd.xkop.home 2>/dev/null) || home=
+    if [ "$section" != xkop ] && { [ "$home" = "$root" ] || [ "$home" = "$legacy" ]; }; then
         uci -q delete uhttpd.xkop || return 1
         changed=1
     fi

@@ -32,33 +32,35 @@ lock_identity() {
     printf '%s:%s' "$1" "$(printf '%s' "${stat##*) }" | awk '{print $20}')"
 }
 
-# Reaping ownership is an empty directory named by process identity. Dead
-# entries can be removed by their unique name without unlinking a successor.
+# Publish a fully initialized, nonempty guard with one rename. An empty guard
+# would let two contenders remove/recreate it before either records ownership.
+# BusyBox mv -T rejects an existing nonempty destination directory; stale
+# cleanup can only rmdir unique dead-owner entries and an empty guard.
 lock_reaping_acquire() {
-    local dir="$1" identity="$2" entry token pid attempt=0
+    local dir="$1" identity="$2" entry token pid attempt=0 prepared
     token="${identity%:*}-${identity#*:}"
-    while ! mkdir "$dir/reaping" 2>/dev/null; do
-        [ "$attempt" = 0 ] || return 1
+    prepared=$(mktemp -d "$XKOP_RUN_DIR/reaping.XXXXXX") || return 1
+    if ! mkdir "$prepared/$token"; then rmdir "$prepared"; return 1; fi
+    while ! mv -T "$prepared" "$dir/reaping" 2>/dev/null; do
+        if [ "$attempt" != 0 ]; then
+            rmdir "$prepared/$token" "$prepared" 2>/dev/null
+            return 1
+        fi
         attempt=1
         for entry in "$dir/reaping"/*; do
             [ -d "$entry" ] || continue
-            token=${entry##*/}
-            pid=${token%%-*}
-            if [ "$(lock_identity "$pid")" = "$pid:${token#*-}" ]; then return 1; fi
-            rmdir "$entry" 2>/dev/null || return 1
+            pid=${entry##*/}
+            if [ "$(lock_identity "${pid%%-*}")" = "${pid%%-*}:${pid#*-}" ]; then
+                rmdir "$prepared/$token" "$prepared" 2>/dev/null
+                return 1
+            fi
+            # Another stale cleaner may have removed this exact dead entry.
+            # Never remove a differently named successor or a populated guard.
+            rmdir "$entry" 2>/dev/null || true
         done
-        # An owner paused between the two mkdir calls will fail its second
-        # mkdir and must abort; a populated guard cannot be removed here.
-        rmdir "$dir/reaping" 2>/dev/null || return 1
+        rmdir "$dir/reaping" 2>/dev/null || true
     done
-    token="${identity%:*}-${identity#*:}"
-    mkdir "$dir/reaping/$token" 2>/dev/null || return 1
-    for entry in "$dir/reaping"/*; do
-        if [ "$entry" != "$dir/reaping/$token" ]; then
-            rmdir "$dir/reaping/$token" 2>/dev/null
-            return 1
-        fi
-    done
+    return 0
 }
 
 lock_reaping_release() {
@@ -67,34 +69,50 @@ lock_reaping_release() {
 }
 
 lock_acquire() {
-    local name="${1:-work}" dir pid owner="$$" identity saved
+    local name="${1:-work}" dir pid owner="$$" identity saved prepared
     dir=$(lock_dir "$name")
     if [ -r /proc/self/stat ]; then read -r owner _ < /proc/self/stat || owner="$$"; fi
     identity=$(lock_identity "$owner") || return 1
     mkdir -p "$XKOP_RUN_DIR" 2>/dev/null || return 1
-    if ! mkdir "$dir" 2>/dev/null; then
-        pid=$(cat "$dir/pid" 2>/dev/null)
-        if [ -z "$pid" ]; then sleep 1; pid=$(cat "$dir/pid" 2>/dev/null); fi
-        saved=$(cat "$dir/identity" 2>/dev/null)
-        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
-            [ -n "$saved" ] || return 1
-            [ "$(lock_identity "$pid")" != "$saved" ] || return 1
-        fi
-        # Only one stale contender can dismantle this directory. Never rm -rf:
-        # a concurrent mkdir after rmdir must not be removed by the loser.
-        lock_reaping_acquire "$dir" "$identity" || return 1
-        if [ "$(cat "$dir/pid" 2>/dev/null)" != "$pid" ] \
-            || [ "$(cat "$dir/identity" 2>/dev/null)" != "$saved" ]; then
-            lock_reaping_release "$dir" "$identity"
-            return 1
-        fi
-        log_warn "снимаю брошенный замок $name"
+    # An observable fresh lock must already identify its owner. Publishing
+    # an empty directory first allowed a paused claimant to overwrite a later
+    # winner after that winner recovered the apparently abandoned directory.
+    prepared=$(mktemp -d "$XKOP_RUN_DIR/lock-new.XXXXXX") || return 1
+    if ! { printf '%s' "$owner" > "$prepared/pid" \
+        && printf '%s' "$identity" > "$prepared/identity"; }; then
+        rm -f "$prepared/pid" "$prepared/identity"
+        rmdir "$prepared" 2>/dev/null
+        return 1
+    fi
+    if mv -T "$prepared" "$dir" 2>/dev/null; then return 0; fi
+    rm -f "$prepared/pid" "$prepared/identity"
+    rmdir "$prepared" 2>/dev/null
+    pid=$(cat "$dir/pid" 2>/dev/null)
+    if [ -z "$pid" ]; then sleep 1; pid=$(cat "$dir/pid" 2>/dev/null); fi
+    saved=$(cat "$dir/identity" 2>/dev/null)
+    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+        [ -n "$saved" ] || return 1
+        [ "$(lock_identity "$pid")" != "$saved" ] || return 1
+    fi
+    # Only one stale contender can dismantle this directory. Never rm -rf:
+    # a concurrent mkdir after rmdir must not be removed by the loser.
+    lock_reaping_acquire "$dir" "$identity" || return 1
+    if [ "$(cat "$dir/pid" 2>/dev/null)" != "$pid" ] \
+        || [ "$(cat "$dir/identity" 2>/dev/null)" != "$saved" ]; then
+        lock_reaping_release "$dir" "$identity"
+        return 1
+    fi
+    log_warn "снимаю брошенный замок $name"
+    # Take over in place while holding the guard. Releasing it before
+    # rmdir/mkdir let another reaper block removal and left every caller
+    # without a lock. The new live owner must be visible before release.
+    if ! { printf '%s' "$owner" > "$dir/pid" \
+        && printf '%s' "$identity" > "$dir/identity"; }; then
         rm -f "$dir/pid" "$dir/identity"
         lock_reaping_release "$dir" "$identity"
-        rmdir "$dir" 2>/dev/null || return 1
-        mkdir "$dir" 2>/dev/null || return 1
+        return 1
     fi
-    printf '%s' "$owner" > "$dir/pid" && printf '%s' "$identity" > "$dir/identity" || return 1
+    lock_reaping_release "$dir" "$identity"
     return 0
 }
 
