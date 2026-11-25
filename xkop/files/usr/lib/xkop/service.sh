@@ -46,9 +46,10 @@ cron_install() {
         echo "$minute 5 * * * /usr/bin/xkop configure > /dev/null 2>&1 $XKOP_CRON_MARKER"
         echo "$minute 4 * * * /usr/bin/xkop lists_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
         echo "$minute 4 * * * /usr/bin/xkop userlists_update > /dev/null 2>&1 $XKOP_CRON_MARKER"
+        # These jobs share the work lock. Keep their start minutes distinct.
         echo "*/5 * * * * /usr/bin/xkop keep > /dev/null 2>&1 $XKOP_CRON_MARKER"
-        echo "*/17 * * * * /usr/bin/xkop canary > /dev/null 2>&1 $XKOP_CRON_MARKER"
-        echo "*/10 * * * * /usr/bin/xkop access_trim > /dev/null 2>&1 $XKOP_CRON_MARKER"
+        echo "2-59/15 * * * * /usr/bin/xkop canary > /dev/null 2>&1 $XKOP_CRON_MARKER"
+        echo "1-59/10 * * * * /usr/bin/xkop access_trim > /dev/null 2>&1 $XKOP_CRON_MARKER"
     } >> "$tmp"
 
     if ! cmp -s "$tmp" "$crontab" 2> /dev/null; then
