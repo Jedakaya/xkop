@@ -28,9 +28,9 @@ jobs:
           inspector="$RUNNER_TEMP/xkop-apk-inspector"
           mkdir -p "$inspector"
           curl -q -fsSL --proto '=https' --proto-redir '=https' --max-time 60 \
-            https://dl-cdn.alpinelinux.org/alpine/edge/main/x86_64/apk-tools-static-3.0.9-r0.apk \
+            https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/apk-tools-static-3.0.9-r0.apk \
             -o "$inspector/apk-static.tar.gz"
-          printf '%s  %s\n' 677dddb435ca7d621ce9f8a1a404a4cedc631651fd025893c548c34a4ceecb19 \
+          printf '%s  %s\n' 0a1a0682375f66a83b7b903f6e4638ccfe312547d50d336b5f2be9fc391281be \
             "$inspector/apk-static.tar.gz" | sha256sum -c -
           tar -xzf "$inspector/apk-static.tar.gz" -C "$inspector" sbin/apk.static
           echo "APK_TOOL=$inspector/sbin/apk.static" >> "$GITHUB_ENV"
